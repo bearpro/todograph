@@ -1,11 +1,12 @@
 module Page.ProjectSelector exposing (Model, Msg(..), init, update, view)
 
 import Browser exposing (Document)
-import Html exposing (Html, button, li, text, ul)
-import Html.Attributes exposing (disabled)
+import Html exposing (Html, a, button, li, text, ul)
+import Html.Attributes exposing (disabled, href)
 import Html.Events exposing (onClick)
 import Platform.Cmd as Cmd
 import Random
+import Route exposing (Route)
 import UUID exposing (UUID)
 
 
@@ -39,20 +40,6 @@ init =
     }
 
 
-viewNewProjectButton : Model -> Html Msg
-viewNewProjectButton model =
-    case model.state of
-        GeneratingNew ->
-            button
-                [ disabled True ]
-                [ text "generating..." ]
-
-        _ ->
-            button
-                [ onClick GenerateNewProject ]
-                [ text "New project" ]
-
-
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
@@ -81,6 +68,36 @@ update msg model =
             ( model, Cmd.none )
 
 
+viewNewProjectButton : Model -> Html Msg
+viewNewProjectButton model =
+    case model.state of
+        GeneratingNew ->
+            button
+                [ disabled True ]
+                [ text "generating..." ]
+
+        _ ->
+            button
+                [ onClick GenerateNewProject ]
+                [ text "New project" ]
+
+
+viewProjectListItem : Project -> Html Msg
+viewProjectListItem project =
+    let
+        name =
+            Maybe.withDefault
+                ("Unnamed project " ++ UUID.toString project.id)
+                project.name
+    in
+    li
+        []
+        [ a
+            [ Route.href (Route.Project project.id) ]
+            [ text name ]
+        ]
+
+
 view : Model -> Document Msg
 view model =
     { title = "Projects"
@@ -89,17 +106,7 @@ view model =
         , ul
             []
             (List.map
-                (\p ->
-                    let
-                        name =
-                            Maybe.withDefault
-                                ("Unnamed project " ++ UUID.toString p.id)
-                                p.name
-                    in
-                    li
-                        []
-                        [ text name ]
-                )
+                viewProjectListItem
                 model.projects
             )
         , viewNewProjectButton model

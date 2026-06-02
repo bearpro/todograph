@@ -6,6 +6,7 @@ import Html exposing (Html)
 import Page.AppInit as AppInitPage
 import Page.ProjectSelector as ProjectSelectorPage
 import Page.TodoGraph as TodoGraphPage
+import Route exposing (Route)
 import Url exposing (Url)
 
 
@@ -16,7 +17,9 @@ type Page
 
 
 type alias Model =
-    { page : Page }
+    { page : Page
+    , key : Nav.Key
+    }
 
 
 type Msg
@@ -28,7 +31,7 @@ type Msg
 
 
 init : () -> Url -> Nav.Key -> ( Model, Cmd Msg )
-init () _ _ =
+init () _ navKey =
     let
         ( appInitModel, cmd ) =
             AppInitPage.init
@@ -39,7 +42,7 @@ init () _ _ =
     in
     let
         model =
-            { page = page }
+            { page = page, key = navKey }
     in
     ( model, Cmd.map AppInitMsg cmd )
 
@@ -74,9 +77,47 @@ subscriptions _ =
     Sub.none
 
 
+changeRouteTo : Maybe Route -> Model -> ( Model, Cmd Msg )
+changeRouteTo maybeRoute model =
+    case maybeRoute of
+        Nothing ->
+            ( { model | page = ProjectSelector ProjectSelectorPage.init }
+            , Nav.replaceUrl model.key "/"
+            )
+
+        Just Route.ProjectSelector ->
+            ( { model | page = ProjectSelector ProjectSelectorPage.init }
+            , Cmd.none
+            )
+
+        Just (Route.Project projectId) ->
+            let
+                ( todoGraphModel, cmd ) =
+                    TodoGraphPage.init { id = projectId, name = "Stub" }
+            in
+            ( { model | page = TodoGraph todoGraphModel }
+            , Cmd.map TodoGraphMsg cmd
+            )
+
+
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case ( msg, model.page ) of
+        ( ClickedLink urlRequest, _ ) ->
+            case urlRequest of
+                Browser.Internal url ->
+                    ( model
+                    , Nav.pushUrl model.key (Url.toString url)
+                    )
+
+                Browser.External href ->
+                    ( model
+                    , Nav.load href
+                    )
+
+        ( ChangedUrl url, _ ) ->
+            changeRouteTo (Route.fromUrl url) model
+
         ( AppInitMsg AppInitPage.Loaded, _ ) ->
             let
                 newModel =
@@ -94,19 +135,6 @@ update msg model =
                     { model | page = ProjectSelector updatedPage }
             in
             ( newModel, Cmd.map ProjectSelectorMsg newCmd )
-
-        ( ProjectSelectorMsg (ProjectSelectorPage.NewProjectGenerated id), _ ) ->
-            let
-                newProject =
-                    { id = id
-                    , name = "Stub"
-                    }
-            in
-            let
-                newModel =
-                    { model | page = TodoGraph (TodoGraphPage.init newProject) }
-            in
-            ( newModel, Cmd.none )
 
         _ ->
             ( model, Cmd.none )
