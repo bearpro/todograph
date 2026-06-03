@@ -2,14 +2,14 @@ module Page.TodoGraph exposing (..)
 
 import Browser exposing (Document)
 import Control.TodoGraphItem
-import Html exposing (Html, div, text)
+import Html exposing (Html, div)
 import Platform.Cmd as Cmd
 import UUID exposing (UUID)
 
 
 type alias Model =
     { id : UUID
-    , name : String
+    , name : Maybe String
     , graphItems : List Control.TodoGraphItem.Model
     }
 
@@ -84,9 +84,9 @@ viewGraphItems items =
 
 view : Model -> Document Msg
 view model =
-    { title = model.name
+    { title = Maybe.withDefault ("Project" ++ UUID.toString model.id) model.name
     , body =
-        [ div [] [ text ("Project " ++ model.name) ]
+        [ div [] []
         , viewGraphItems model.graphItems
         ]
     }

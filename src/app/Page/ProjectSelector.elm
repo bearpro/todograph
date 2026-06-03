@@ -2,7 +2,7 @@ module Page.ProjectSelector exposing (Model, Msg(..), init, update, view)
 
 import Browser exposing (Document)
 import Html exposing (Html, a, button, li, text, ul)
-import Html.Attributes exposing (disabled)
+import Html.Attributes exposing (class, disabled)
 import Html.Events exposing (onClick)
 import Platform.Cmd as Cmd
 import Random
@@ -78,7 +78,7 @@ viewNewProjectButton model =
 
         _ ->
             button
-                [ onClick GenerateNewProject ]
+                [ onClick GenerateNewProject, class "btn btn-primary" ]
                 [ text "New project" ]
 
 
@@ -91,7 +91,7 @@ viewProjectListItem project =
                 project.name
     in
     li
-        []
+        [ class "list-group-item" ]
         [ a
             [ Route.href (Route.Project project.id) ]
             [ text name ]
@@ -104,7 +104,7 @@ view model =
     , body =
         [ text "Project list"
         , ul
-            []
+            [ class "list-group" ]
             (List.map
                 viewProjectListItem
                 model.projects

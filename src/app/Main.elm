@@ -2,8 +2,9 @@ module Main exposing (main)
 
 import Browser
 import Browser.Navigation as Nav
+import Control.Navbar
 import Control.TodoGraphItem
-import Html exposing (Html)
+import Html
 import Page.AppInit as AppInitPage
 import Page.ProjectSelector as ProjectSelectorPage
 import Page.TodoGraph as TodoGraphPage exposing (Msg(..))
@@ -48,10 +49,38 @@ init () _ navKey =
     ( model, Cmd.map AppInitMsg cmd )
 
 
-mapDocument : (childMsg -> parentMsg) -> Browser.Document childMsg -> Browser.Document parentMsg
-mapDocument toParent document =
+currentRoute : Page -> Route
+currentRoute page =
+    case page of
+        AppInit _ ->
+            Route.ProjectSelector
+
+        ProjectSelector _ ->
+            Route.ProjectSelector
+
+        TodoGraph model ->
+            Route.Project model.id
+
+
+currentProjectName : Page -> Maybe String
+currentProjectName page =
+    case page of
+        TodoGraph model ->
+            model.name
+
+        _ ->
+            Nothing
+
+
+mapDocument : Page -> (childMsg -> parentMsg) -> Browser.Document childMsg -> Browser.Document parentMsg
+mapDocument page toParent document =
     { title = "TodoGraph | " ++ document.title
-    , body = List.map (Html.map toParent) document.body
+    , body =
+        Control.Navbar.view
+            { currentPage = currentRoute page
+            , currentProjectName = currentProjectName page
+            }
+            :: List.map (Html.map toParent) document.body
     }
 
 
@@ -59,13 +88,13 @@ viewPage : Page -> Browser.Document Msg
 viewPage page =
     case page of
         AppInit model ->
-            mapDocument AppInitMsg (AppInitPage.view model)
+            mapDocument page AppInitMsg (AppInitPage.view model)
 
         TodoGraph model ->
-            mapDocument TodoGraphMsg (TodoGraphPage.view model)
+            mapDocument page TodoGraphMsg (TodoGraphPage.view model)
 
         ProjectSelector model ->
-            mapDocument ProjectSelectorMsg (ProjectSelectorPage.view model)
+            mapDocument page ProjectSelectorMsg (ProjectSelectorPage.view model)
 
 
 view : Model -> Browser.Document Msg
@@ -96,7 +125,7 @@ changeRouteTo maybeRoute model =
                 ( todoGraphModel, cmd ) =
                     TodoGraphPage.init
                         { id = projectId
-                        , name = "Stub"
+                        , name = Nothing
                         , graphItems =
                             [ Control.TodoGraphItem.Text
                                 { text = "Stub"
@@ -159,7 +188,8 @@ update msg model =
             ( newModel, Cmd.map TodoGraphMsg newCmd )
 
         _ ->
-            ( model, Cmd.none )
+            Debug.log "Unexpected root update"
+                ( model, Cmd.none )
 
 
 main : Program () Model Msg
