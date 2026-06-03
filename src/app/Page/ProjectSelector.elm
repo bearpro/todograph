@@ -2,11 +2,11 @@ module Page.ProjectSelector exposing (Model, Msg(..), init, update, view)
 
 import Browser exposing (Document)
 import Html exposing (Html, a, button, li, text, ul)
-import Html.Attributes exposing (disabled, href)
+import Html.Attributes exposing (disabled)
 import Html.Events exposing (onClick)
 import Platform.Cmd as Cmd
 import Random
-import Route exposing (Route)
+import Route
 import UUID exposing (UUID)
 
 

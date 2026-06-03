@@ -2,10 +2,11 @@ module Main exposing (main)
 
 import Browser
 import Browser.Navigation as Nav
+import Control.TodoGraphItem
 import Html exposing (Html)
 import Page.AppInit as AppInitPage
 import Page.ProjectSelector as ProjectSelectorPage
-import Page.TodoGraph as TodoGraphPage
+import Page.TodoGraph as TodoGraphPage exposing (Msg(..))
 import Route exposing (Route)
 import Url exposing (Url)
 
@@ -93,7 +94,17 @@ changeRouteTo maybeRoute model =
         Just (Route.Project projectId) ->
             let
                 ( todoGraphModel, cmd ) =
-                    TodoGraphPage.init { id = projectId, name = "Stub" }
+                    TodoGraphPage.init
+                        { id = projectId
+                        , name = "Stub"
+                        , graphItems =
+                            [ Control.TodoGraphItem.Text
+                                { text = "Stub"
+                                , status = False
+                                , editState = Control.TodoGraphItem.NotEditing
+                                }
+                            ]
+                        }
             in
             ( { model | page = TodoGraph todoGraphModel }
             , Cmd.map TodoGraphMsg cmd
@@ -135,6 +146,17 @@ update msg model =
                     { model | page = ProjectSelector updatedPage }
             in
             ( newModel, Cmd.map ProjectSelectorMsg newCmd )
+
+        ( TodoGraphMsg todoGraphMsg, TodoGraph page ) ->
+            let
+                ( updatedPage, newCmd ) =
+                    TodoGraphPage.update todoGraphMsg page
+            in
+            let
+                newModel =
+                    { model | page = TodoGraph updatedPage }
+            in
+            ( newModel, Cmd.map TodoGraphMsg newCmd )
 
         _ ->
             ( model, Cmd.none )
