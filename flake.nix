@@ -29,6 +29,7 @@
             elmPackages.elm-format
             elmPackages.elm-test
             elmPackages.elm-review
+            elmPackages.elm-live
 
             # Bun backend
             bun
