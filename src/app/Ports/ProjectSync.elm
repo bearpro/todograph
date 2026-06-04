@@ -1,6 +1,5 @@
 port module Ports.ProjectSync exposing
     ( checkServerProjects
-    , copyProjectLink
     , debounceSaveServerProject
     , fetchServerProject
     , fetchServerProjectVersion
@@ -39,9 +38,6 @@ port subscribeProject : String -> Cmd msg
 
 
 port unsubscribeProject : String -> Cmd msg
-
-
-port copyProjectLink : String -> Cmd msg
 
 
 port serverProjectsChecked : (Decode.Value -> msg) -> Sub msg

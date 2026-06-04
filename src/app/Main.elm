@@ -447,11 +447,6 @@ unsubscribeProjectCmd projectId =
     ProjectSync.unsubscribeProject (projectIdString projectId)
 
 
-copyProjectLinkCmd : UUID -> Cmd Msg
-copyProjectLinkCmd projectId =
-    ProjectSync.copyProjectLink ("/p/" ++ projectIdString projectId)
-
-
 activeSyncedProjectId : Page -> Maybe UUID
 activeSyncedProjectId page =
     case page of
