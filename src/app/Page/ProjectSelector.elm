@@ -4,7 +4,7 @@ import Browser exposing (Document)
 import Browser.Dom as Dom
 import Domain.Project as DomainProject
 import Html exposing (Attribute, Html, a, button, div, h2, input, li, text, ul)
-import Html.Attributes as Attr exposing (class, disabled, type_, value)
+import Html.Attributes as Attr exposing (class, disabled, title, type_, value)
 import Html.Events exposing (on, onClick, onInput)
 import Json.Decode as Decode
 import Platform.Cmd as Cmd
@@ -29,6 +29,7 @@ type alias Model =
     { projects : List Project
     , state : State
     , projectNameEdit : Maybe ProjectNameEdit
+    , projectDeleteConfirm : Maybe UUID
     }
 
 
@@ -47,6 +48,9 @@ type Msg
     | SaveProjectName UUID
     | CancelProjectRename
     | ProjectNameInputFocused (Result Dom.Error ())
+    | RequestProjectDelete UUID
+    | ConfirmProjectDelete UUID
+    | CancelProjectDelete
 
 
 init : List DomainProject.Project -> Model
@@ -54,6 +58,7 @@ init projects =
     { projects = List.map projectSummary projects
     , state = ViewingProjects
     , projectNameEdit = Nothing
+    , projectDeleteConfirm = Nothing
     }
 
 
@@ -83,13 +88,25 @@ update msg model =
 
         NewProjectGenerated id ->
             let
+                newProject =
+                    { id = id, name = Nothing }
+
                 newModel =
                     { model
-                        | projects = { id = id, name = Nothing } :: model.projects
+                        | projects = newProject :: model.projects
                         , state = ViewingProjects
+                        , projectNameEdit =
+                            Just
+                                { id = id
+                                , draft = ""
+                                }
+                        , projectDeleteConfirm = Nothing
                     }
             in
-            ( newModel, Cmd.none )
+            ( newModel
+            , Dom.focus (projectNameInputId id)
+                |> Task.attempt ProjectNameInputFocused
+            )
 
         StartProjectRename project ->
             ( { model
@@ -129,6 +146,37 @@ update msg model =
 
         ProjectNameInputFocused _ ->
             ( model, Cmd.none )
+
+        RequestProjectDelete projectId ->
+            ( { model | projectDeleteConfirm = Just projectId }
+            , Cmd.none
+            )
+
+        ConfirmProjectDelete projectId ->
+            ( { model
+                | projects =
+                    model.projects
+                        |> List.filter (.id >> (/=) projectId)
+                , projectDeleteConfirm = Nothing
+                , projectNameEdit =
+                    case model.projectNameEdit of
+                        Just edit ->
+                            if edit.id == projectId then
+                                Nothing
+
+                            else
+                                model.projectNameEdit
+
+                        Nothing ->
+                            Nothing
+              }
+            , Cmd.none
+            )
+
+        CancelProjectDelete ->
+            ( { model | projectDeleteConfirm = Nothing }
+            , Cmd.none
+            )
 
 
 renameProject : UUID -> Maybe ProjectNameEdit -> Project -> Project
@@ -181,8 +229,8 @@ projectDisplayName project =
         project.name
 
 
-viewProjectListItem : Maybe UUID -> Maybe ProjectNameEdit -> Project -> Html Msg
-viewProjectListItem activeProjectId maybeEdit project =
+viewProjectListItem : Maybe UUID -> Maybe ProjectNameEdit -> Maybe UUID -> Project -> Html Msg
+viewProjectListItem activeProjectId maybeEdit deleteConfirm project =
     let
         isEditing =
             maybeEdit
@@ -191,6 +239,9 @@ viewProjectListItem activeProjectId maybeEdit project =
 
         isActive =
             activeProjectId == Just project.id
+
+        isConfirmingDelete =
+            deleteConfirm == Just project.id
     in
     li
         [ class
@@ -203,7 +254,10 @@ viewProjectListItem activeProjectId maybeEdit project =
                    )
             )
         ]
-        [ if isEditing then
+        [ if isConfirmingDelete then
+            viewProjectDeleteConfirm isActive project
+
+          else if isEditing then
             viewProjectRename isActive project maybeEdit
 
           else
@@ -239,6 +293,53 @@ viewProjectRow isActive project =
                 )
             ]
             [ text "Rename" ]
+        , button
+            [ onClick (RequestProjectDelete project.id)
+            , type_ "button"
+            , title ("Delete " ++ projectDisplayName project)
+            , Attr.attribute "aria-label" ("Delete " ++ projectDisplayName project)
+            , class
+                (if isActive then
+                    "btn btn-light btn-sm text-danger"
+
+                 else
+                    "btn btn-outline-danger btn-sm"
+                )
+            ]
+            [ text "🗑️" ]
+        ]
+
+
+viewProjectDeleteConfirm : Bool -> Project -> Html Msg
+viewProjectDeleteConfirm isActive project =
+    div [ class "d-flex align-items-center gap-2" ]
+        [ div
+            [ class "flex-grow-1 text-truncate" ]
+            [ text (projectDisplayName project) ]
+        , button
+            [ onClick (ConfirmProjectDelete project.id)
+            , type_ "button"
+            , class
+                (if isActive then
+                    "btn btn-light btn-sm text-danger"
+
+                 else
+                    "btn btn-danger btn-sm"
+                )
+            ]
+            [ text "Delete" ]
+        , button
+            [ onClick CancelProjectDelete
+            , type_ "button"
+            , class
+                (if isActive then
+                    "btn btn-outline-light btn-sm"
+
+                 else
+                    "btn btn-outline-secondary btn-sm"
+                )
+            ]
+            [ text "Cancel" ]
         ]
 
 
@@ -321,7 +422,7 @@ viewPanel activeProjectId model =
         , ul
             [ class "list-group" ]
             (List.map
-                (viewProjectListItem activeProjectId model.projectNameEdit)
+                (viewProjectListItem activeProjectId model.projectNameEdit model.projectDeleteConfirm)
                 model.projects
             )
         ]

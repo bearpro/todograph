@@ -1,5 +1,6 @@
 port module Ports.ProjectStorage exposing
-    ( loadProjects
+    ( deleteProject
+    , loadProjects
     , projectsLoaded
     , saveProject
     , storageFailed
@@ -13,6 +14,9 @@ port loadProjects : () -> Cmd msg
 
 
 port saveProject : Encode.Value -> Cmd msg
+
+
+port deleteProject : String -> Cmd msg
 
 
 port projectsLoaded : (Decode.Value -> msg) -> Sub msg

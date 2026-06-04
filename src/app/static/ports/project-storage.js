@@ -90,6 +90,30 @@
     });
   }
 
+  function deleteProject(projectId) {
+    return openDb().then((db) => {
+      return new Promise((resolve, reject) => {
+        if (typeof projectId !== "string") {
+          reject(new Error("Project id must be a string"));
+          return;
+        }
+
+        const transaction = db.transaction(projectStoreName, "readwrite");
+        const store = transaction.objectStore(projectStoreName);
+
+        transaction.oncomplete = () => {
+          resolve();
+        };
+
+        transaction.onerror = () => {
+          reject(transaction.error || new Error("Failed to delete project"));
+        };
+
+        store.delete(projectId);
+      });
+    });
+  }
+
   function init(app) {
     app.ports.loadProjects.subscribe(() => {
       getAllProjects()
@@ -103,6 +127,12 @@
 
     app.ports.saveProject.subscribe((project) => {
       putProject(project).catch((error) => {
+        reportStorageError(app, error);
+      });
+    });
+
+    app.ports.deleteProject.subscribe((projectId) => {
+      deleteProject(projectId).catch((error) => {
         reportStorageError(app, error);
       });
     });

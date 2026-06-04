@@ -246,7 +246,6 @@ changeRouteTo maybeRoute model =
                     in
                     ( { model
                         | page = TodoGraph todoGraphModel
-                        , projectSelector = ProjectSelectorPage.init model.projects
                         , route = maybeRoute
                         , mobileSidebarOpen = False
                       }
@@ -308,6 +307,11 @@ upsertProject nextProject projects =
 saveProjectCmd : Project.Project -> Cmd Msg
 saveProjectCmd project =
     ProjectStorage.saveProject (Project.projectEncoder project)
+
+
+deleteProjectCmd : UUID -> Cmd Msg
+deleteProjectCmd projectId =
+    ProjectStorage.deleteProject (UUID.toString projectId)
 
 
 scheduleProjectSave : UUID -> Cmd Msg
@@ -444,9 +448,22 @@ update msg model =
 
                         nextProjects =
                             newProject :: model.projects
+
+                        ( todoGraphModel, todoGraphCmd ) =
+                            initTodoGraph newProject
                     in
-                    ( { newModel | projects = nextProjects }
-                    , Cmd.batch [ pageCmd, scheduleProjectSave newProject.id ]
+                    ( { newModel
+                        | projects = nextProjects
+                        , page = TodoGraph todoGraphModel
+                        , route = Just (Route.Project projectId)
+                        , mobileSidebarOpen = False
+                      }
+                    , Cmd.batch
+                        [ pageCmd
+                        , Cmd.map TodoGraphMsg todoGraphCmd
+                        , Nav.pushUrl model.key ("/p/" ++ UUID.toString projectId)
+                        , scheduleProjectSave newProject.id
+                        ]
                     )
 
                 ProjectSelectorPage.SaveProjectName projectId ->
@@ -482,6 +499,42 @@ update msg model =
                         , page = nextPage
                       }
                     , cmdWithStorageSave pageCmd maybeChangedProject
+                    )
+
+                ProjectSelectorPage.ConfirmProjectDelete projectId ->
+                    let
+                        nextProjects =
+                            model.projects
+                                |> List.filter (.id >> (/=) projectId)
+
+                        deletedActiveProject =
+                            activeProjectId model.page == Just projectId
+
+                        nextModel =
+                            if deletedActiveProject then
+                                { newModel
+                                    | projects = nextProjects
+                                    , page = NoProjectSelected
+                                    , route = Just Route.ProjectSelector
+                                    , mobileSidebarOpen = False
+                                  }
+
+                            else
+                                { newModel | projects = nextProjects }
+
+                        routeCmd =
+                            if deletedActiveProject then
+                                Nav.replaceUrl model.key "/"
+
+                            else
+                                Cmd.none
+                    in
+                    ( nextModel
+                    , Cmd.batch
+                        [ pageCmd
+                        , deleteProjectCmd projectId
+                        , routeCmd
+                        ]
                     )
 
                 _ ->
@@ -522,11 +575,11 @@ update msg model =
         ( ProjectsLoaded value, _ ) ->
             case Decode.decodeValue Project.projectsDecoder value of
                 Ok storedProjects ->
-                    if List.isEmpty storedProjects then
-                        ( model, generateFirstProject )
-
-                    else
-                        changeRouteTo model.route { model | projects = storedProjects }
+                    changeRouteTo model.route
+                        { model
+                            | projects = storedProjects
+                            , projectSelector = ProjectSelectorPage.init storedProjects
+                        }
 
                 Err error ->
                     ( { model | storageError = Just (Decode.errorToString error) }
@@ -551,7 +604,10 @@ update msg model =
                     gettingStartedProject projectId nodeId
 
                 modelWithProject =
-                    { model | projects = [ firstProject ] }
+                    { model
+                        | projects = [ firstProject ]
+                        , projectSelector = ProjectSelectorPage.init [ firstProject ]
+                    }
 
                 ( routedModel, routeCmd ) =
                     changeRouteTo model.route modelWithProject
