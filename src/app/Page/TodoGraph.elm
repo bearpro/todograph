@@ -20,6 +20,7 @@ type alias Model =
     { project : Project.Project
     , nodeUiStates : List NodeUiState
     , joinDrag : Maybe JoinDrag
+    , now : Maybe Time.Posix
     }
 
 
@@ -298,8 +299,8 @@ update msg model =
             , Cmd.none
             )
 
-        Tick _ ->
-            ( { model | project = Project.advanceRunningTimers 1 model.project }
+        Tick now ->
+            ( { model | now = Just now }
             , Cmd.none
             )
 
@@ -330,9 +331,12 @@ hasRunningTimer project =
         |> List.concatMap .nodes
         |> List.any
             (\node ->
-                node.timer
-                    |> Maybe.map .running
-                    |> Maybe.withDefault False
+                case node.timer of
+                    Just (Project.Started _) ->
+                        True
+
+                    _ ->
+                        False
             )
 
 
@@ -346,6 +350,17 @@ updateGraphItem nodeId graphItemMsg model =
 
                 ( updatedControlModel, command ) =
                     TodoGraphItem.update graphItemMsg controlModel
+
+                nextNow =
+                    case graphItemMsg of
+                        TodoGraphItem.TimerStarted now ->
+                            Just now
+
+                        TodoGraphItem.TimerStopped now ->
+                            Just now
+
+                        _ ->
+                            model.now
             in
             ( { model
                 | project =
@@ -353,6 +368,7 @@ updateGraphItem nodeId graphItemMsg model =
                         |> Project.updateNode nodeId updatedControlModel.node
                 , nodeUiStates =
                     upsertNodeUiState updatedControlModel model.nodeUiStates
+                , now = nextNow
               }
             , Cmd.map (GraphItemMsg nodeId) command
             )
@@ -505,7 +521,11 @@ viewNode : Bool -> Int -> Model -> Project.Column -> Int -> Project.Node -> Html
 viewNode hideButtons maxRow model column index node =
     let
         itemHtml =
-            TodoGraphItem.view { hideButtons = hideButtons } (controlModelFor node model)
+            TodoGraphItem.view
+                { hideButtons = hideButtons
+                , now = model.now
+                }
+                (controlModelFor node model)
                 |> Html.map (GraphItemMsg node.id)
     in
     div

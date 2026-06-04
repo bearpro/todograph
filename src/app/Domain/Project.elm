@@ -1,12 +1,12 @@
 module Domain.Project exposing (..)
 
+import Time
 import UUID exposing (UUID)
 
 
-type alias Timer =
-    { elapsedSeconds : Int
-    , running : Bool
-    }
+type Timer
+    = Started Time.Posix
+    | Stopped Int
 
 
 type alias Node =
@@ -61,7 +61,7 @@ timerNode id text =
     { id = id
     , text = text
     , status = False
-    , timer = Just { elapsedSeconds = 0, running = False }
+    , timer = Just (Stopped 0)
     }
 
 
@@ -119,42 +119,6 @@ updateNode nodeId updatedNode project =
                         }
                     )
     }
-
-
-advanceRunningTimers : Int -> Project -> Project
-advanceRunningTimers seconds project =
-    { project
-        | columns =
-            project.columns
-                |> List.map
-                    (\column ->
-                        { column
-                            | nodes =
-                                column.nodes
-                                    |> List.map (advanceNodeTimer seconds)
-                        }
-                    )
-    }
-
-
-advanceNodeTimer : Int -> Node -> Node
-advanceNodeTimer seconds node =
-    case node.timer of
-        Just timer ->
-            if timer.running then
-                { node
-                    | timer =
-                        Just
-                            { timer
-                                | elapsedSeconds = timer.elapsedSeconds + seconds
-                            }
-                }
-
-            else
-                node
-
-        Nothing ->
-            node
 
 
 forkColumn : UUID -> UUID -> UUID -> Node -> Project -> Project

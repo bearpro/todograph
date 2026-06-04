@@ -133,6 +133,7 @@ changeRouteTo maybeRoute model =
                         { project = Project.initialProject projectId projectId
                         , nodeUiStates = []
                         , joinDrag = Nothing
+                        , now = Nothing
                         }
             in
             ( { model | page = TodoGraph todoGraphModel }

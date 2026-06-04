@@ -8,6 +8,7 @@ import Html.Events exposing (on, onBlur, onCheck, onClick, onInput)
 import Json.Decode as Decode
 import Platform.Cmd as Cmd
 import Task
+import Time
 import UUID exposing (UUID)
 
 
@@ -24,6 +25,7 @@ type alias Model =
 
 type alias ViewOptions =
     { hideButtons : Bool
+    , now : Maybe Time.Posix
     }
 
 
@@ -33,7 +35,10 @@ type Msg
     | TextInputFocused (Result Dom.Error ())
     | StopTextEdit
     | DraftChanged String
-    | ToggleTimerRunning
+    | StartTimer
+    | TimerStarted Time.Posix
+    | StopTimer
+    | TimerStopped Time.Posix
 
 
 fromNode : Project.Node -> Model
@@ -78,8 +83,19 @@ update msg model =
                 NotEditing ->
                     ( model, Cmd.none )
 
-        ToggleTimerRunning ->
-            ( { model | node = toggleTimer model.node }
+        StartTimer ->
+            ( model, Task.perform TimerStarted Time.now )
+
+        TimerStarted now ->
+            ( { model | node = startTimer now model.node }
+            , Cmd.none
+            )
+
+        StopTimer ->
+            ( model, Task.perform TimerStopped Time.now )
+
+        TimerStopped now ->
+            ( { model | node = stopTimer now model.node }
             , Cmd.none
             )
 
@@ -94,12 +110,29 @@ updateNodeText nodeText node =
     { node | text = nodeText }
 
 
-toggleTimer : Project.Node -> Project.Node
-toggleTimer node =
+startTimer : Time.Posix -> Project.Node -> Project.Node
+startTimer now node =
     { node
         | timer =
             node.timer
-                |> Maybe.map (\timer -> { timer | running = not timer.running })
+                |> Maybe.map (\_ -> Project.Started now)
+    }
+
+
+stopTimer : Time.Posix -> Project.Node -> Project.Node
+stopTimer now node =
+    { node
+        | timer =
+            node.timer
+                |> Maybe.map
+                    (\timer ->
+                        case timer of
+                            Project.Started startedAt ->
+                                Project.Stopped (elapsedSeconds startedAt now)
+
+                            Project.Stopped seconds ->
+                                Project.Stopped seconds
+                    )
     }
 
 
@@ -133,39 +166,78 @@ textInputId nodeId =
     "todo-graph-node-text-" ++ UUID.toString nodeId
 
 
-viewTimer : Bool -> Maybe Project.Timer -> Html Msg
-viewTimer hideButtons maybeTimer =
+viewTimer : ViewOptions -> Maybe Project.Timer -> Html Msg
+viewTimer options maybeTimer =
     case maybeTimer of
         Just timer ->
             div [ class "d-flex align-items-center gap-2 ms-auto" ]
-                (if hideButtons then
-                    [ span [ class "text-muted small" ] [ text (formatSeconds timer.elapsedSeconds) ] ]
+                (if options.hideButtons then
+                    [ span [ class "text-muted small" ] [ text (formatSeconds (timerSeconds options.now timer)) ] ]
 
                  else
                     [ button
-                        [ onClick ToggleTimerRunning
+                        [ onClick (timerButtonMsg timer)
                         , class
-                            (if timer.running then
-                                "btn btn-sm btn-success"
+                            (case timer of
+                                Project.Started _ ->
+                                    "btn btn-sm btn-success"
 
-                             else
-                                "btn btn-sm btn-outline-secondary"
+                                Project.Stopped seconds ->
+                                    if seconds > 0 then
+                                        "btn btn-sm btn-warning"
+
+                                    else
+                                        "btn btn-sm btn-outline-secondary"
                             )
                         ]
-                        [ text
-                            (if timer.running then
-                                "pause"
-
-                             else
-                                "start"
-                            )
-                        ]
-                    , span [ class "text-muted small" ] [ text (formatSeconds timer.elapsedSeconds) ]
+                        [ text (timerButtonLabel timer) ]
+                    , span [ class "text-muted small" ] [ text (formatSeconds (timerSeconds options.now timer)) ]
                     ]
                 )
 
         Nothing ->
             text ""
+
+
+timerButtonMsg : Project.Timer -> Msg
+timerButtonMsg timer =
+    case timer of
+        Project.Started _ ->
+            StopTimer
+
+        Project.Stopped _ ->
+            StartTimer
+
+
+timerButtonLabel : Project.Timer -> String
+timerButtonLabel timer =
+    case timer of
+        Project.Started _ ->
+            "Stop"
+
+        Project.Stopped seconds ->
+            if seconds > 0 then
+                "Restart"
+
+            else
+                "Start"
+
+
+timerSeconds : Maybe Time.Posix -> Project.Timer -> Int
+timerSeconds maybeNow timer =
+    case timer of
+        Project.Started startedAt ->
+            maybeNow
+                |> Maybe.map (elapsedSeconds startedAt)
+                |> Maybe.withDefault 0
+
+        Project.Stopped seconds ->
+            seconds
+
+
+elapsedSeconds : Time.Posix -> Time.Posix -> Int
+elapsedSeconds startedAt now =
+    max 0 ((Time.posixToMillis now - Time.posixToMillis startedAt) // 1000)
 
 
 formatSeconds : Int -> String
@@ -221,5 +293,5 @@ view options model =
             ]
             []
         , viewText model.node model.textEditState
-        , viewTimer options.hideButtons model.node.timer
+        , viewTimer options model.node.timer
         ]
