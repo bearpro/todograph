@@ -107,6 +107,20 @@ body {
   height: 1.125rem;
 }
 
+.todo-graph-node-checkbox {
+  accent-color: var(--bs-success);
+}
+
+.todo-graph-node-checkbox:checked {
+  background-color: var(--bs-success);
+  border-color: var(--bs-success);
+}
+
+.todo-graph-node-checkbox:focus {
+  border-color: var(--bs-success);
+  box-shadow: 0 0 0 0.2rem rgba(var(--bs-success-rgb), 0.25);
+}
+
 .todo-graph-join-button {
   touch-action: none;
 }
