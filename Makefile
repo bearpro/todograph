@@ -18,7 +18,7 @@ dev-mongo:
 	docker compose up -d mongo
 
 test-frontend:
-	cd src/app && elm-test tests/Page/TodoGraph/LayoutTest.elm
+	cd src/app && elm-test tests
 
 test-backend:
 	cd src/backend && pnpm test

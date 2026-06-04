@@ -357,20 +357,47 @@ elapsedSeconds startedAt now =
 formatSeconds : Int -> String
 formatSeconds seconds =
     let
+        days =
+            seconds // 86400
+
+        dayRemainder =
+            modBy 86400 seconds
+
+        hours =
+            dayRemainder // 3600
+
+        hourRemainder =
+            modBy 3600 dayRemainder
+
         minutes =
-            seconds // 60
+            hourRemainder // 60
 
         remainder =
-            modBy 60 seconds
+            modBy 60 hourRemainder
 
         paddedRemainder =
-            if remainder < 10 then
-                "0" ++ String.fromInt remainder
+            pad2 remainder
 
-            else
-                String.fromInt remainder
+        hourDisplay =
+            String.fromInt hours ++ ":" ++ pad2 minutes ++ ":" ++ paddedRemainder
     in
-    String.fromInt minutes ++ ":" ++ paddedRemainder
+    if days > 0 then
+        String.fromInt days ++ "d " ++ hourDisplay
+
+    else if seconds > 3600 then
+        hourDisplay
+
+    else
+        String.fromInt (seconds // 60) ++ ":" ++ paddedRemainder
+
+
+pad2 : Int -> String
+pad2 value =
+    if value < 10 then
+        "0" ++ String.fromInt value
+
+    else
+        String.fromInt value
 
 
 onEnter : msg -> Attribute msg
