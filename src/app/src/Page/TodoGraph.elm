@@ -1274,7 +1274,7 @@ viewDeleteButton maybeJoinDrag project node =
 
 
 joinTargetStyles : Project.Project -> Maybe JoinDrag -> Project.Chain -> Project.Node -> List (Html.Attribute Msg)
-joinTargetStyles project maybeJoinDrag column node =
+joinTargetStyles project maybeJoinDrag _ node =
     case maybeJoinDrag of
         Just joinDrag ->
             if node.id == joinDrag.sourceNodeId then

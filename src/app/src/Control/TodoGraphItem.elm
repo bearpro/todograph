@@ -408,15 +408,14 @@ viewContent options model =
                 ++ viewTimer options model.node.timer
 
         Nothing ->
-            [ div
+            div
                 [ class "card-body d-flex align-items-start gap-2 px-3 py-2"
                 , style "min-width" "0"
                 ]
                 [ viewCheckbox model.node
                 , viewText model.node model.textEditState
                 ]
-            ]
-                ++ viewTimer options model.node.timer
+                :: viewTimer options model.node.timer
 
 
 viewCheckbox : Project.Node -> Html Msg

@@ -189,16 +189,15 @@ update msg model =
                         |> List.filter (.id >> (/=) projectId)
                 , projectDeleteConfirm = Nothing
                 , projectNameEdit =
-                    case model.projectNameEdit of
-                        Just edit ->
-                            if edit.id == projectId then
-                                Nothing
+                    model.projectNameEdit
+                        |> Maybe.andThen
+                            (\edit ->
+                                if edit.id == projectId then
+                                    Nothing
 
-                            else
-                                model.projectNameEdit
-
-                        Nothing ->
-                            Nothing
+                                else
+                                    model.projectNameEdit
+                            )
               }
             , Cmd.none
             )
@@ -305,7 +304,7 @@ viewProjectListItem activeProjectId maybeEdit deleteConfirm project =
 
 projectListItemAttributes : Bool -> Bool -> Bool -> Project -> List (Attribute Msg)
 projectListItemAttributes isActive isEditing isConfirmingDelete project =
-    [ class
+    class
         ("list-group-item app-project-list-item"
             ++ (if isActive then
                     " app-project-list-item-active border-primary border-2"
@@ -320,8 +319,7 @@ projectListItemAttributes isActive isEditing isConfirmingDelete project =
                     ""
                )
         )
-    ]
-        ++ (if not isEditing && not isConfirmingDelete then
+        :: (if not isEditing && not isConfirmingDelete then
                 [ onClick (OpenProject (UUID.toString project.id))
                 , Attr.attribute "role" "link"
                 , Attr.attribute "tabindex" "0"
