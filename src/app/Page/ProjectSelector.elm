@@ -2,14 +2,14 @@ module Page.ProjectSelector exposing (Model, Msg(..), init, update, view, viewPa
 
 import Browser exposing (Document)
 import Browser.Dom as Dom
+import Control.FluentIcon as FluentIcon
 import Domain.Project as DomainProject
-import Html exposing (Attribute, Html, a, button, div, h2, input, label, li, text, ul)
+import Html exposing (Attribute, Html, button, div, h2, input, li, text, ul)
 import Html.Attributes as Attr exposing (class, disabled, title, type_, value)
-import Html.Events exposing (on, onCheck, onClick, onInput)
+import Html.Events exposing (on, onClick, onInput, stopPropagationOn)
 import Json.Decode as Decode
 import Platform.Cmd as Cmd
 import Random
-import Route
 import Task
 import UUID exposing (UUID)
 
@@ -44,6 +44,8 @@ type Msg
     = OpenProject String
     | GenerateNewProject
     | NewProjectGenerated UUID
+    | CloneProject UUID
+    | ProjectCloned DomainProject.Project
     | StartProjectRename Project
     | ProjectNameDraftChanged String
     | SaveProjectName UUID
@@ -53,7 +55,7 @@ type Msg
     | ConfirmProjectDelete UUID
     | CancelProjectDelete
     | ToggleProjectSync UUID Bool
-    | CopyProjectLink UUID
+    | IgnoreClick
 
 
 init : List DomainProject.Project -> Model
@@ -109,6 +111,30 @@ update msg model =
             in
             ( newModel
             , Dom.focus (projectNameInputId id)
+                |> Task.attempt ProjectNameInputFocused
+            )
+
+        CloneProject _ ->
+            ( model, Cmd.none )
+
+        ProjectCloned project ->
+            let
+                clonedProject =
+                    projectSummary project
+
+                newModel =
+                    { model
+                        | projects = clonedProject :: model.projects
+                        , projectNameEdit =
+                            Just
+                                { id = clonedProject.id
+                                , draft = Maybe.withDefault "" clonedProject.name
+                                }
+                        , projectDeleteConfirm = Nothing
+                    }
+            in
+            ( newModel
+            , Dom.focus (projectNameInputId clonedProject.id)
                 |> Task.attempt ProjectNameInputFocused
             )
 
@@ -187,7 +213,7 @@ update msg model =
             , Cmd.none
             )
 
-        CopyProjectLink _ ->
+        IgnoreClick ->
             ( model, Cmd.none )
 
 
@@ -265,16 +291,7 @@ viewProjectListItem activeProjectId maybeEdit deleteConfirm project =
             deleteConfirm == Just project.id
     in
     li
-        [ class
-            ("list-group-item"
-                ++ (if isActive then
-                        " active"
-
-                    else
-                        ""
-                   )
-            )
-        ]
+        (projectListItemAttributes isActive isEditing isConfirmingDelete project)
         [ if isConfirmingDelete then
             viewProjectDeleteConfirm isActive project
 
@@ -286,136 +303,186 @@ viewProjectListItem activeProjectId maybeEdit deleteConfirm project =
         ]
 
 
+projectListItemAttributes : Bool -> Bool -> Bool -> Project -> List (Attribute Msg)
+projectListItemAttributes isActive isEditing isConfirmingDelete project =
+    [ class
+        ("list-group-item app-project-list-item"
+            ++ (if isActive then
+                    " app-project-list-item-active border-primary border-2"
+
+                else
+                    ""
+               )
+            ++ (if not isEditing && not isConfirmingDelete then
+                    " app-project-list-item-clickable"
+
+                else
+                    ""
+               )
+        )
+    ]
+        ++ (if not isEditing && not isConfirmingDelete then
+                [ onClick (OpenProject (UUID.toString project.id))
+                , Attr.attribute "role" "link"
+                , Attr.attribute "tabindex" "0"
+                , onEnter (OpenProject (UUID.toString project.id))
+                ]
+
+            else
+                []
+           )
+
+
 viewProjectRow : Bool -> Project -> Html Msg
 viewProjectRow isActive project =
-    div [ class "d-flex align-items-center gap-2" ]
-        [ div [ class "flex-grow-1 min-w-0" ]
-            [ a
-                [ Route.href (Route.Project project.id)
-                , onClick (OpenProject (UUID.toString project.id))
-                , class
-                    ("d-block text-truncate text-decoration-none"
-                        ++ (if isActive then
-                                " text-white"
-
-                            else
-                                " text-body"
-                           )
-                    )
-                ]
+    div [ class "min-w-0" ]
+        [ div [ class "min-w-0" ]
+            [ div
+                [ class "d-block text-truncate text-body" ]
                 [ text (projectDisplayName project) ]
-            , div [ class "d-flex align-items-center gap-2 mt-1" ]
-                [ div [ class "form-check form-check-inline mb-0" ]
-                    [ input
-                        [ type_ "checkbox"
-                        , Attr.id (syncCheckboxId project.id)
-                        , Attr.checked project.sync
-                        , onCheck (ToggleProjectSync project.id)
-                        , class "form-check-input"
-                        ]
-                        []
-                    , label
-                        [ Attr.for (syncCheckboxId project.id)
-                        , class
-                            ("form-check-label small"
-                                ++ (if isActive then
-                                        " text-white"
-
-                                    else
-                                        " text-muted"
-                                   )
-                            )
-                        ]
-                        [ text "Sync" ]
-                    ]
-                , if project.sync then
-                    button
-                        [ onClick (CopyProjectLink project.id)
-                        , class
-                            (if isActive then
-                                "btn btn-light btn-sm"
-
-                             else
-                                "btn btn-outline-secondary btn-sm"
-                            )
-                        , type_ "button"
-                        ]
-                        [ text "Copy link" ]
-
-                  else
-                    text ""
-                ]
             ]
-        , button
-            [ onClick (StartProjectRename project)
-            , class
-                (if isActive then
-                    "btn btn-light btn-sm"
-
-                 else
-                    "btn btn-secondary btn-sm"
-                )
+        , viewProjectActionGroup project
+            [ viewProjectSyncButton isActive project
+            , viewProjectCloneButton isActive project
+            , viewProjectRenameButton isActive project
+            , viewProjectDeleteButton isActive project
             ]
-            [ text "Rename" ]
-        , button
-            [ onClick (RequestProjectDelete project.id)
-            , type_ "button"
-            , title ("Delete " ++ projectDisplayName project)
-            , Attr.attribute "aria-label" ("Delete " ++ projectDisplayName project)
-            , class
-                (if isActive then
-                    "btn btn-light btn-sm text-danger"
-
-                 else
-                    "btn btn-outline-danger btn-sm"
-                )
-            ]
-            [ text "🗑️" ]
         ]
 
 
+viewProjectActionGroup : Project -> List (Html Msg) -> Html Msg
+viewProjectActionGroup project actions =
+    div
+        [ class "btn-group btn-group-sm mt-2"
+        , Attr.attribute "role" "group"
+        , Attr.attribute "aria-label" ("Actions for " ++ projectDisplayName project)
+        , stopClick IgnoreClick
+        ]
+        actions
+
+
+stopClick : msg -> Attribute msg
+stopClick msg =
+    stopPropagationOn "click" (Decode.succeed ( msg, True ))
+
+
+onClickStop : msg -> Attribute msg
+onClickStop msg =
+    stopClick msg
+
+
+viewProjectSyncButton : Bool -> Project -> Html Msg
+viewProjectSyncButton isActive project =
+    let
+        label =
+            if project.sync then
+                "Disable sync for " ++ projectDisplayName project
+
+            else
+                "Enable sync for " ++ projectDisplayName project
+
+        icon =
+            if project.sync then
+                FluentIcon.CloudCheckmark
+
+            else
+                FluentIcon.CloudOff
+    in
+    button
+        [ onClickStop (ToggleProjectSync project.id (not project.sync))
+        , type_ "button"
+        , title label
+        , Attr.attribute "aria-label" label
+        , class (projectSyncButtonClass isActive project.sync)
+        ]
+        [ FluentIcon.view icon ]
+
+
+viewProjectCloneButton : Bool -> Project -> Html Msg
+viewProjectCloneButton _ project =
+    button
+        [ onClickStop (CloneProject project.id)
+        , type_ "button"
+        , title ("Clone " ++ projectDisplayName project)
+        , Attr.attribute "aria-label" ("Clone " ++ projectDisplayName project)
+        , class "btn btn-outline-secondary btn-sm btn-icon"
+        ]
+        [ FluentIcon.view FluentIcon.Copy ]
+
+
+projectSyncButtonClass : Bool -> Bool -> String
+projectSyncButtonClass _ sync =
+    if sync then
+        "btn btn-outline-success btn-sm btn-icon"
+
+    else
+        "btn btn-outline-secondary btn-sm btn-icon"
+
+
+viewProjectRenameButton : Bool -> Project -> Html Msg
+viewProjectRenameButton _ project =
+    button
+        [ onClickStop (StartProjectRename project)
+        , type_ "button"
+        , title ("Rename " ++ projectDisplayName project)
+        , Attr.attribute "aria-label" ("Rename " ++ projectDisplayName project)
+        , class "btn btn-outline-secondary btn-sm btn-icon"
+        ]
+        [ FluentIcon.view FluentIcon.Edit ]
+
+
+viewProjectDeleteButton : Bool -> Project -> Html Msg
+viewProjectDeleteButton _ project =
+    button
+        [ onClickStop (RequestProjectDelete project.id)
+        , type_ "button"
+        , title ("Delete " ++ projectDisplayName project)
+        , Attr.attribute "aria-label" ("Delete " ++ projectDisplayName project)
+        , class "btn btn-outline-danger btn-sm btn-icon"
+        ]
+        [ FluentIcon.view FluentIcon.Delete ]
+
+
 viewProjectDeleteConfirm : Bool -> Project -> Html Msg
-viewProjectDeleteConfirm isActive project =
-    div [ class "d-flex align-items-center gap-2" ]
+viewProjectDeleteConfirm _ project =
+    div [ class "min-w-0" ]
         [ div
-            [ class "flex-grow-1 text-truncate" ]
+            [ class "text-truncate" ]
             [ text (projectDisplayName project) ]
-        , button
-            [ onClick (ConfirmProjectDelete project.id)
-            , type_ "button"
-            , class
-                (if isActive then
-                    "btn btn-light btn-sm text-danger"
-
-                 else
-                    "btn btn-danger btn-sm"
-                )
+        , div
+            [ class "btn-group btn-group-sm mt-2"
+            , Attr.attribute "role" "group"
+            , Attr.attribute "aria-label" ("Delete confirmation for " ++ projectDisplayName project)
+            , stopClick IgnoreClick
             ]
-            [ text "Delete" ]
-        , button
-            [ onClick CancelProjectDelete
-            , type_ "button"
-            , class
-                (if isActive then
-                    "btn btn-outline-light btn-sm"
-
-                 else
-                    "btn btn-outline-secondary btn-sm"
-                )
+            [ button
+                [ onClickStop (ConfirmProjectDelete project.id)
+                , type_ "button"
+                , class "btn btn-danger btn-sm"
+                ]
+                [ text "Delete" ]
+            , button
+                [ onClickStop CancelProjectDelete
+                , type_ "button"
+                , class "btn btn-outline-secondary btn-sm"
+                ]
+                [ text "Cancel" ]
             ]
-            [ text "Cancel" ]
         ]
 
 
 viewProjectRename : Bool -> Project -> Maybe ProjectNameEdit -> Html Msg
-viewProjectRename isActive project maybeEdit =
+viewProjectRename _ project maybeEdit =
     let
         draft =
             maybeEdit
                 |> Maybe.map .draft
                 |> Maybe.withDefault ""
     in
-    div [ class "d-flex align-items-center gap-2" ]
+    div
+        [ class "min-w-0"
+        , stopClick IgnoreClick
+        ]
         [ input
             [ type_ "text"
             , Attr.id (projectNameInputId project.id)
@@ -425,33 +492,26 @@ viewProjectRename isActive project maybeEdit =
             , class "form-control form-control-sm"
             ]
             []
-        , button
-            [ onClick (SaveProjectName project.id)
-            , class "btn btn-primary btn-sm"
+        , viewProjectActionGroup project
+            [ button
+                [ onClickStop (SaveProjectName project.id)
+                , type_ "button"
+                , class "btn btn-primary btn-sm"
+                ]
+                [ text "Save" ]
+            , button
+                [ onClickStop CancelProjectRename
+                , type_ "button"
+                , class "btn btn-outline-secondary btn-sm"
+                ]
+                [ text "Cancel" ]
             ]
-            [ text "Save" ]
-        , button
-            [ onClick CancelProjectRename
-            , class
-                (if isActive then
-                    "btn btn-outline-light btn-sm"
-
-                 else
-                    "btn btn-outline-secondary btn-sm"
-                )
-            ]
-            [ text "Cancel" ]
         ]
 
 
 projectNameInputId : UUID -> String
 projectNameInputId projectId =
     "project-name-" ++ UUID.toString projectId
-
-
-syncCheckboxId : UUID -> String
-syncCheckboxId projectId =
-    "project-sync-" ++ UUID.toString projectId
 
 
 onEnter : msg -> Attribute msg

@@ -1,7 +1,7 @@
 module Control.Navbar exposing (Model, view)
 
 import Html exposing (Html, a, button, div, nav, span, text)
-import Html.Attributes exposing (attribute, class, title, type_)
+import Html.Attributes as Attr exposing (attribute, class, title, type_)
 import Html.Events exposing (onClick)
 import Route exposing (Route, href)
 import UUID
@@ -54,11 +54,25 @@ view model =
                 [ class "navbar-brand"
                 , href Route.ProjectSelector
                 ]
-                [ text "TODO Graph" ]
+                [ text "ToDo Graph" ]
+            , githubLink
             , div [ class "d-flex align-items-center gap-2 ms-auto min-w-0" ]
                 (projectTitle model)
             ]
         ]
+
+
+githubLink : Html msg
+githubLink =
+    a
+        [ Attr.href "https://github.com/bearpro/todograph"
+        , Attr.target "_blank"
+        , Attr.rel "noopener noreferrer"
+        , class "btn btn-outline-secondary btn-sm btn-icon"
+        , title "GitHub repository"
+        , attribute "aria-label" "GitHub repository"
+        ]
+        [ span [ class "app-navbar-icon app-navbar-github-icon" ] [] ]
 
 
 projectTitle : Model msg -> List (Html msg)

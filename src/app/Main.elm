@@ -50,6 +50,7 @@ type Msg
     | ProjectsLoaded Decode.Value
     | StorageFailed String
     | FirstProjectGenerated UUID UUID
+    | ProjectCloned UUID UUID
     | ProjectTimestampedForSave UUID Time.Posix
     | ServerProjectsChecked Decode.Value
     | ServerProjectVersionLoaded Decode.Value
@@ -638,6 +639,22 @@ renameStoredProject projectId name project =
         project
 
 
+cloneProject : UUID -> Project.Project -> Project.Project
+cloneProject cloneId project =
+    { project
+        | id = cloneId
+        , name = Just (projectDisplayName project ++ " (cloned)")
+        , sync = False
+    }
+
+
+projectDisplayName : Project.Project -> String
+projectDisplayName project =
+    Maybe.withDefault
+        ("Unnamed project " ++ UUID.toString project.id)
+        project.name
+
+
 cmdWithStorageSave : Cmd Msg -> Maybe Project.Project -> Cmd Msg
 cmdWithStorageSave pageCmd maybeProject =
     case maybeProject of
@@ -922,8 +939,13 @@ update msg model =
                     { model | projectSelector = updatedSelector }
             in
             case projectSelectorMsg of
-                ProjectSelectorPage.OpenProject _ ->
-                    ( { newModel | mobileSidebarOpen = False }, pageCmd )
+                ProjectSelectorPage.OpenProject projectIdText ->
+                    ( { newModel | mobileSidebarOpen = False }
+                    , Cmd.batch
+                        [ pageCmd
+                        , Nav.pushUrl model.key ("/p/" ++ projectIdText)
+                        ]
+                    )
 
                 ProjectSelectorPage.NewProjectGenerated projectId ->
                     let
@@ -948,6 +970,14 @@ update msg model =
                         , unsubscribeCurrentProjectExcept Nothing model
                         , Nav.pushUrl model.key ("/p/" ++ UUID.toString projectId)
                         , scheduleProjectSave newProject.id
+                        ]
+                    )
+
+                ProjectSelectorPage.CloneProject sourceProjectId ->
+                    ( newModel
+                    , Cmd.batch
+                        [ pageCmd
+                        , Random.generate (ProjectCloned sourceProjectId) UUID.generator
                         ]
                     )
 
@@ -1036,14 +1066,6 @@ update msg model =
                             |> Maybe.map saveProjectCmd
                             |> Maybe.withDefault Cmd.none
                         , syncCmd
-                        ]
-                    )
-
-                ProjectSelectorPage.CopyProjectLink projectId ->
-                    ( newModel
-                    , Cmd.batch
-                        [ pageCmd
-                        , copyProjectLinkCmd projectId
                         ]
                     )
 
@@ -1178,6 +1200,43 @@ update msg model =
             ( routedModel
             , Cmd.batch [ routeCmd, scheduleProjectSave firstProject.id ]
             )
+
+        ( ProjectCloned sourceProjectId cloneId, _ ) ->
+            case findProject sourceProjectId model.projects of
+                Just sourceProject ->
+                    let
+                        clonedProject =
+                            cloneProject cloneId sourceProject
+
+                        nextProjects =
+                            clonedProject :: model.projects
+
+                        ( updatedSelector, selectorCmd ) =
+                            ProjectSelectorPage.update
+                                (ProjectSelectorPage.ProjectCloned clonedProject)
+                                model.projectSelector
+
+                        ( todoGraphModel, todoGraphCmd ) =
+                            initTodoGraph clonedProject
+                    in
+                    ( { model
+                        | projects = nextProjects
+                        , projectSelector = updatedSelector
+                        , page = TodoGraph todoGraphModel
+                        , route = Just (Route.Project cloneId)
+                        , mobileSidebarOpen = False
+                      }
+                    , Cmd.batch
+                        [ Cmd.map ProjectSelectorMsg selectorCmd
+                        , Cmd.map TodoGraphMsg todoGraphCmd
+                        , unsubscribeCurrentProjectExcept Nothing model
+                        , Nav.pushUrl model.key ("/p/" ++ UUID.toString cloneId)
+                        , scheduleProjectSave clonedProject.id
+                        ]
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         ( ServerProjectsChecked value, _ ) ->
             case Decode.decodeValue serverProjectChecksDecoder value of

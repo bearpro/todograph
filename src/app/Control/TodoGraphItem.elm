@@ -1,9 +1,10 @@
 module Control.TodoGraphItem exposing (..)
 
 import Browser.Dom as Dom
+import Control.FluentIcon as FluentIcon
 import Domain.Project as Project
 import Html exposing (Attribute, Html, button, div, input, li, span, text, ul)
-import Html.Attributes exposing (autofocus, checked, class, id, style, type_, value)
+import Html.Attributes exposing (attribute, autofocus, checked, class, id, style, title, type_, value)
 import Html.Events exposing (on, onBlur, onCheck, onClick, onInput)
 import Json.Decode as Decode
 import Platform.Cmd as Cmd
@@ -248,11 +249,14 @@ viewTimer options maybeTimer =
                     [ span [ class "text-muted small" ] [ text (formatSeconds (timerSeconds options.now timer)) ]
                     , button
                         ([ onClick (timerButtonMsg timer)
-                         , class (timerButtonClass timer)
+                         , type_ "button"
+                         , class (timerButtonClass timer ++ " btn-icon")
+                         , title (timerButtonLabel timer)
+                         , attribute "aria-label" (timerButtonLabel timer)
                          ]
                             ++ hiddenStyles options.hideButtons
                         )
-                        [ text (timerButtonLabel timer) ]
+                        [ FluentIcon.view (timerButtonIcon timer) ]
                     ]
                 ]
             ]
@@ -283,6 +287,20 @@ timerButtonLabel timer =
 
             else
                 "Start"
+
+
+timerButtonIcon : Project.Timer -> FluentIcon.Icon
+timerButtonIcon timer =
+    case timer of
+        Project.Started _ ->
+            FluentIcon.Stop
+
+        Project.Stopped seconds ->
+            if seconds > 0 then
+                FluentIcon.ArrowClockwise
+
+            else
+                FluentIcon.Play
 
 
 timerButtonClass : Project.Timer -> String

@@ -3,9 +3,10 @@ module Page.TodoGraph exposing (..)
 import Browser exposing (Document)
 import Browser.Dom as Dom
 import Browser.Events as BrowserEvents
+import Control.FluentIcon as FluentIcon
 import Control.TodoGraphItem as TodoGraphItem
 import Domain.Project as Project
-import Html exposing (Html, button, div, span, text)
+import Html exposing (Html, button, div, text)
 import Html.Attributes exposing (attribute, class, disabled, id, style, title, type_)
 import Html.Events exposing (on, onClick, onMouseEnter, onMouseLeave)
 import Json.Decode as Decode
@@ -88,11 +89,6 @@ nodeHeight =
     132
 
 
-rowStep : Int
-rowStep =
-    164
-
-
 columnStep : Int
 columnStep =
     380
@@ -110,7 +106,7 @@ columnGap =
 
 rowGap : Int
 rowGap =
-    rowStep - nodeHeight
+    32
 
 
 edgeColor : String
@@ -653,23 +649,23 @@ view model =
                 ]
                 [ div
                     [ id graphRootId
-                , style "position" "relative"
-                , style "display" "grid"
-                , style "grid-template-columns" ("repeat(" ++ String.fromInt (columnCount sortedColumns) ++ ", " ++ px cardWidth ++ ")")
-                , style "grid-template-rows" ("repeat(" ++ String.fromInt (maxRow + 1) ++ ", " ++ px nodeHeight ++ ")")
-                , style "column-gap" (px columnGap)
-                , style "row-gap" (px rowGap)
-                , style "align-content" "end"
-                , style "justify-content" "start"
-                , style "width" (px (graphWidth sortedColumns))
-                , style "height" (px (graphHeight model sortedColumns))
-                , style "min-width" (px (graphWidth sortedColumns))
-                , style "min-height" (px (graphHeight model sortedColumns))
-                ]
-                (viewEdges model sortedColumns
-                    ++ viewDragEdge model sortedColumns model.joinDrag
-                    ++ viewNodes hideButtons maxRow model sortedColumns
-                )
+                    , style "position" "relative"
+                    , style "display" "grid"
+                    , style "grid-template-columns" ("repeat(" ++ String.fromInt (columnCount sortedColumns) ++ ", " ++ px cardWidth ++ ")")
+                    , style "grid-template-rows" (gridTemplateRows model sortedColumns)
+                    , style "column-gap" (px columnGap)
+                    , style "row-gap" (px rowGap)
+                    , style "align-content" "end"
+                    , style "justify-content" "start"
+                    , style "width" (px (graphWidth sortedColumns))
+                    , style "height" (px (graphHeight model sortedColumns))
+                    , style "min-width" (px (graphWidth sortedColumns))
+                    , style "min-height" (px (graphHeight model sortedColumns))
+                    ]
+                    (viewEdges model sortedColumns
+                        ++ viewDragEdge model sortedColumns model.joinDrag
+                        ++ viewNodes hideButtons maxRow model sortedColumns
+                    )
                 ]
             ]
         ]
@@ -682,13 +678,16 @@ viewNodes hideButtons maxRow model columns =
         |> List.concatMap
             (\column ->
                 column.nodes
-                    |> List.indexedMap (viewNode hideButtons maxRow model column)
+                    |> List.indexedMap (viewNode hideButtons maxRow model columns column)
             )
 
 
-viewNode : Bool -> Int -> Model -> Project.Column -> Int -> Project.Node -> Html Msg
-viewNode hideButtons maxRow model column index node =
+viewNode : Bool -> Int -> Model -> List Project.Column -> Project.Column -> Int -> Project.Node -> Html Msg
+viewNode hideButtons maxRow model columns column index node =
     let
+        currentRow =
+            nodeRowValue column index
+
         itemContent =
             TodoGraphItem.viewContent
                 { hideButtons = hideButtons
@@ -702,7 +701,7 @@ viewNode hideButtons maxRow model column index node =
         , style "grid-column" (String.fromInt (column.order + 1))
         , style "grid-row" (String.fromInt (nodeGridRow maxRow column index))
         , style "width" (px nodeGridWidth)
-        , style "height" (px nodeHeight)
+        , style "height" (px (rowHeight model columns currentRow))
         , style "align-self" "stretch"
         , style "justify-self" "start"
         , style "z-index"
@@ -782,13 +781,15 @@ viewNewDropdown maybeJoinDrag project openNewMenu column index node =
     in
     button
         ([ type_ "button"
-         , class "btn btn-outline-primary dropdown-toggle"
+         , class "btn btn-outline-primary btn-icon dropdown-toggle"
+         , title "New"
+         , attribute "aria-label" "New"
          , onClick (ToggleNewMenu node.id)
          , disabled (isJoining || not canCreate)
          ]
             ++ hiddenStyles isJoining
         )
-        [ text "New" ]
+        [ FluentIcon.view FluentIcon.AddSquare ]
         :: (if not isJoining && canCreate && isOpen then
                 [ div
                     ([ class "dropdown-menu show"
@@ -839,13 +840,15 @@ viewAddDropdown maybeJoinDrag openAddMenu column index node =
     in
     button
         ([ type_ "button"
-         , class "btn btn-outline-primary dropdown-toggle"
+         , class "btn btn-outline-primary btn-icon dropdown-toggle"
+         , title "Add"
+         , attribute "aria-label" "Add"
          , onClick (ToggleAddMenu node.id)
          , disabled isJoining
          ]
             ++ hiddenStyles isJoining
         )
-        [ text "Add" ]
+        [ FluentIcon.view FluentIcon.AddCircle ]
         :: (if not isJoining && isOpen then
                 [ div
                     ([ class "dropdown-menu show"
@@ -905,7 +908,7 @@ viewJoinButton maybeJoinDrag column index node =
         [ button
             ([ type_ "button"
              , id (joinButtonId node.id)
-             , class "btn btn-outline-primary"
+             , class "btn btn-outline-primary btn-icon"
              , title "Unjoin"
              , attribute "aria-label" "Unjoin"
              , onClick (Unjoin column.id)
@@ -913,7 +916,7 @@ viewJoinButton maybeJoinDrag column index node =
              ]
                 ++ hiddenStyles isJoining
             )
-            [ text "Unjoin" ]
+            [ FluentIcon.view FluentIcon.LinkDismiss ]
         ]
 
     else
@@ -921,31 +924,15 @@ viewJoinButton maybeJoinDrag column index node =
             ([ on "mousedown" (Decode.map (StartJoinDrag column.id node.id) mousePointDecoder)
              , type_ "button"
              , id (joinButtonId node.id)
-             , class "btn btn-outline-primary"
+             , class "btn btn-outline-primary btn-icon"
              , title "Join"
              , attribute "aria-label" "Join"
              , disabled (isJoining || not (canStartJoinDrag column index))
              ]
                 ++ hiddenStyles (isJoining && not isSource)
             )
-            [ joinIcon
-            , text "Join"
-            ]
+            [ FluentIcon.view FluentIcon.Link ]
         ]
-
-
-joinIcon : Html Msg
-joinIcon =
-    span
-        [ style "display" "inline-block"
-        , style "width" "0.55rem"
-        , style "height" "0.55rem"
-        , style "border" "1px solid currentColor"
-        , style "border-radius" "50%"
-        , style "margin-right" "0.35rem"
-        , style "vertical-align" "-0.05rem"
-        ]
-        []
 
 
 canStartJoinDrag : Project.Column -> Int -> Bool
@@ -964,14 +951,14 @@ viewDeleteButton maybeJoinDrag project node =
     [ button
         ([ type_ "button"
          , onClick (DeleteNode node.id)
-         , class "btn btn-outline-danger"
+         , class "btn btn-outline-danger btn-icon"
          , title "Delete node"
          , attribute "aria-label" "Delete node"
          , disabled (isJoining || not (Project.canDeleteNode node.id project))
          ]
             ++ hiddenStyles isJoining
         )
-        [ text "Delete" ]
+        [ FluentIcon.view FluentIcon.Delete ]
     ]
 
 
@@ -1076,7 +1063,7 @@ joinDragSourcePoint model columns joinDrag sourceColumn sourceIndex sourceNode =
 
         _ ->
             { x = columnX sourceColumn + cardWidth
-            , y = nodeCenter model sourceColumn sourceIndex sourceNode
+            , y = nodeCenter model columns sourceColumn sourceIndex sourceNode
             }
 
 
@@ -1092,8 +1079,8 @@ viewVerticalEdges model columns =
                         (\( ( sourceIndex, sourceNode ), ( targetIndex, _ ) ) ->
                             viewVerticalEdge
                                 (columnX column + (cardWidth // 2))
-                                (nodeTop model column sourceIndex sourceNode)
-                                (nodeBottom column targetIndex)
+                                (nodeTop model columns column sourceIndex sourceNode)
+                                (nodeBottom model columns column targetIndex)
                         )
             )
 
@@ -1111,10 +1098,10 @@ viewForkEdges model columns =
                                     ( Just sourceIndex, Just sourceNode, targetNode :: _ ) ->
                                         let
                                             sourceY =
-                                                nodeCenter model sourceColumn sourceIndex sourceNode
+                                                nodeCenter model columns sourceColumn sourceIndex sourceNode
 
                                             targetY =
-                                                nodeCenter model column 0 targetNode
+                                                nodeCenter model columns column 0 targetNode
 
                                             x1 =
                                                 columnX sourceColumn + cardWidth
@@ -1148,9 +1135,9 @@ viewJoinEdges model columns =
                                     ( Just sourceIndex, Just targetIndex, Just targetNode ) ->
                                         viewElbowEdgeLeft
                                             (columnX column)
-                                            (nodeCenter model column sourceIndex sourceNode)
+                                            (nodeCenter model columns column sourceIndex sourceNode)
                                             (columnX targetColumn + cardWidth)
-                                            (nodeCenter model targetColumn targetIndex targetNode)
+                                            (nodeCenter model columns targetColumn targetIndex targetNode)
 
                                     _ ->
                                         []
@@ -1398,19 +1385,19 @@ nodeRowValue column index =
     column.baseRow + index
 
 
-nodeBottom : Project.Column -> Int -> Int
-nodeBottom column index =
-    nodeRowValue column index * rowStep
+nodeBottom : Model -> List Project.Column -> Project.Column -> Int -> Int
+nodeBottom model columns column index =
+    rowBottom model columns (nodeRowValue column index)
 
 
-nodeTop : Model -> Project.Column -> Int -> Project.Node -> Int
-nodeTop model column index node =
-    nodeBottom column index + nodeCardHeight model node
+nodeTop : Model -> List Project.Column -> Project.Column -> Int -> Project.Node -> Int
+nodeTop model columns column index node =
+    nodeBottom model columns column index + nodeCardHeight model node
 
 
-nodeCenter : Model -> Project.Column -> Int -> Project.Node -> Int
-nodeCenter model column index node =
-    nodeBottom column index + (nodeCardHeight model node // 2)
+nodeCenter : Model -> List Project.Column -> Project.Column -> Int -> Project.Node -> Int
+nodeCenter model columns column index node =
+    nodeBottom model columns column index + (nodeCardHeight model node // 2)
 
 
 nodeCardHeight : Model -> Project.Node -> Int
@@ -1440,6 +1427,50 @@ maxGraphRow columns =
         |> Maybe.withDefault 0
 
 
+graphRows : List Project.Column -> List Int
+graphRows columns =
+    List.range 0 (maxGraphRow columns)
+
+
+rowHeight : Model -> List Project.Column -> Int -> Int
+rowHeight model columns row =
+    columns
+        |> List.concatMap
+            (\column ->
+                column.nodes
+                    |> List.indexedMap
+                        (\index node ->
+                            if nodeRowValue column index == row then
+                                Just (nodeCardHeight model node)
+
+                            else
+                                Nothing
+                        )
+                    |> List.filterMap identity
+            )
+        |> List.maximum
+        |> Maybe.withDefault nodeHeight
+
+
+rowBottom : Model -> List Project.Column -> Int -> Int
+rowBottom model columns row =
+    if row <= 0 then
+        0
+
+    else
+        List.range 0 (row - 1)
+            |> List.map (\lowerRow -> rowHeight model columns lowerRow + rowGap)
+            |> List.sum
+
+
+gridTemplateRows : Model -> List Project.Column -> String
+gridTemplateRows model columns =
+    graphRows columns
+        |> List.reverse
+        |> List.map (rowHeight model columns >> px)
+        |> String.join " "
+
+
 columnCount : List Project.Column -> Int
 columnCount columns =
     let
@@ -1464,23 +1495,13 @@ graphWidth columns =
 graphHeight : Model -> List Project.Column -> Int
 graphHeight model columns =
     let
-        measuredHeight =
-            columns
-                |> List.concatMap
-                    (\column ->
-                        column.nodes
-                            |> List.indexedMap
-                                (\index node ->
-                                    nodeTop model column index node
-                                )
-                    )
-                |> List.maximum
-                |> Maybe.withDefault nodeHeight
-
-        slotHeight =
-            (maxGraphRow columns * rowStep) + nodeHeight
+        rows =
+            graphRows columns
     in
-    max slotHeight measuredHeight
+    rows
+        |> List.map (rowHeight model columns)
+        |> List.sum
+        |> (+) (rowGap * max 0 (List.length rows - 1))
 
 
 adjacentPairs : List a -> List ( a, a )
