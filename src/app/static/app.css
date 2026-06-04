@@ -59,6 +59,16 @@ body {
   margin-left: 0;
 }
 
+.btn-group > .btn-icon.dropdown-toggle:not(:last-child) {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.btn-group > .btn-icon.dropdown-toggle:not(:first-child) {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
 .todo-graph-create-button {
   display: inline-flex;
   align-items: center;
