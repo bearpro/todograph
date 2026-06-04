@@ -22,7 +22,6 @@ type alias Model =
     , nodeUiStates : List NodeUiState
     , joinDrag : Maybe JoinDrag
     , now : Maybe Time.Posix
-    , openNewMenu : Maybe UUID
     , openAddMenu : Maybe UUID
     , nodeHeights : List NodeHeight
     }
@@ -58,7 +57,6 @@ type alias MousePoint =
 
 type Msg
     = GraphItemMsg UUID TodoGraphItem.Msg
-    | ToggleNewMenu UUID
     | ToggleAddMenu UUID
     | CreateTextNodeAfter UUID
     | TextNodeAfterGenerated UUID UUID
@@ -106,7 +104,32 @@ columnGap =
 
 rowGap : Int
 rowGap =
-    32
+    createButtonOverhang
+
+
+createButtonSize : Int
+createButtonSize =
+    28
+
+
+createButtonGap : Int
+createButtonGap =
+    4
+
+
+createButtonSideGap : Int
+createButtonSideGap =
+    6
+
+
+createButtonOverhang : Int
+createButtonOverhang =
+    createButtonSize + createButtonGap
+
+
+createButtonSideOverhang : Int
+createButtonSideOverhang =
+    createButtonSize + createButtonSideGap
 
 
 edgeColor : String
@@ -130,19 +153,6 @@ update msg model =
         GraphItemMsg nodeId graphItemMsg ->
             updateGraphItem nodeId graphItemMsg model
 
-        ToggleNewMenu nodeId ->
-            ( { model
-                | openNewMenu =
-                    if model.openNewMenu == Just nodeId then
-                        Nothing
-
-                    else
-                        Just nodeId
-                , openAddMenu = Nothing
-              }
-            , Cmd.none
-            )
-
         ToggleAddMenu nodeId ->
             ( { model
                 | openAddMenu =
@@ -151,7 +161,6 @@ update msg model =
 
                     else
                         Just nodeId
-                , openNewMenu = Nothing
               }
             , Cmd.none
             )
@@ -169,7 +178,6 @@ update msg model =
             in
             ( { model
                 | project = nextProject
-                , openNewMenu = Nothing
                 , openAddMenu = Nothing
               }
             , measureProjectNodes nextProject
@@ -184,7 +192,6 @@ update msg model =
             ( { model
                 | project = nextProject
                 , openAddMenu = Nothing
-                , openNewMenu = Nothing
               }
             , measureProjectNodes nextProject
             )
@@ -200,7 +207,6 @@ update msg model =
                 , nodeUiStates =
                     upsertNodeEditState nodeId (TodoGraphItem.EditingDescription "") model.nodeUiStates
                 , openAddMenu = Nothing
-                , openNewMenu = Nothing
               }
             , Cmd.batch
                 [ measureProjectNodes nextProject
@@ -230,7 +236,6 @@ update msg model =
             in
             ( { model
                 | project = nextProject
-                , openNewMenu = Nothing
                 , openAddMenu = Nothing
               }
             , measureProjectNodes nextProject
@@ -247,7 +252,6 @@ update msg model =
                         , sourceButtonCenter = Nothing
                         , hoveredNodeId = Nothing
                         }
-                , openNewMenu = Nothing
                 , openAddMenu = Nothing
               }
             , Cmd.batch
@@ -265,7 +269,6 @@ update msg model =
             in
             ( { model
                 | project = nextProject
-                , openNewMenu = Nothing
                 , openAddMenu = Nothing
               }
             , measureProjectNodes nextProject
@@ -349,7 +352,7 @@ update msg model =
                                     )
                                 |> Maybe.withDefault model.project
                     in
-                    ( { model | project = nextProject, joinDrag = Nothing, openNewMenu = Nothing, openAddMenu = Nothing }
+                    ( { model | project = nextProject, joinDrag = Nothing, openAddMenu = Nothing }
                     , measureProjectNodes nextProject
                     )
 
@@ -401,12 +404,6 @@ update msg model =
                 , nodeHeights =
                     model.nodeHeights
                         |> List.filter (.nodeId >> (/=) nodeId)
-                , openNewMenu =
-                    if model.openNewMenu == Just nodeId then
-                        Nothing
-
-                    else
-                        model.openNewMenu
                 , openAddMenu =
                     if model.openAddMenu == Just nodeId then
                         Nothing
@@ -688,6 +685,9 @@ viewNode hideButtons maxRow model columns column index node =
         currentRow =
             nodeRowValue column index
 
+        cardHeight =
+            nodeCardHeight model node
+
         itemContent =
             TodoGraphItem.viewContent
                 { hideButtons = hideButtons
@@ -705,7 +705,7 @@ viewNode hideButtons maxRow model columns column index node =
         , style "align-self" "stretch"
         , style "justify-self" "start"
         , style "z-index"
-            (if model.openNewMenu == Just node.id || model.openAddMenu == Just node.id then
+            (if model.openAddMenu == Just node.id then
                 "8"
 
              else
@@ -714,7 +714,9 @@ viewNode hideButtons maxRow model columns column index node =
         , onMouseEnter (HoverJoinTarget node.id)
         , onMouseLeave (LeaveJoinTarget node.id)
         ]
-        [ div
+        [ viewNewItemButton model.joinDrag model.project node cardHeight
+        , viewNewColumnButton model.joinDrag model.project column node cardHeight
+        , div
             ([ class "card d-flex flex-column"
              , id (nodeCardId node.id)
              , style "position" "absolute"
@@ -726,16 +728,62 @@ viewNode hideButtons maxRow model columns column index node =
                 ++ joinTargetStyles model.project model.joinDrag column node
             )
             (itemContent
-                ++ viewCardFooter model.joinDrag model.project model.openNewMenu model.openAddMenu column index node
+                ++ viewCardFooter model.joinDrag model.project model.openAddMenu column index node
             )
         ]
 
 
-viewCardFooter : Maybe JoinDrag -> Project.Project -> Maybe UUID -> Maybe UUID -> Project.Column -> Int -> Project.Node -> List (Html Msg)
-viewCardFooter maybeJoinDrag project openNewMenu openAddMenu column index node =
+viewNewItemButton : Maybe JoinDrag -> Project.Project -> Project.Node -> Int -> Html Msg
+viewNewItemButton maybeJoinDrag project node cardHeight =
+    let
+        isJoining =
+            maybeJoinDrag /= Nothing
+    in
+    button
+        ([ type_ "button"
+         , class "btn btn-outline-primary todo-graph-create-button"
+         , title "New item"
+         , attribute "aria-label" "New item"
+         , onClick (CreateTextNodeAfter node.id)
+         , disabled (isJoining || not (Project.canCreateAfterNode node.id project))
+         , style "position" "absolute"
+         , style "left" "0"
+         , style "bottom" (px (cardHeight + createButtonGap))
+         , style "z-index" "9"
+         ]
+            ++ hiddenStyles isJoining
+        )
+        [ FluentIcon.view FluentIcon.AddSquare ]
+
+
+viewNewColumnButton : Maybe JoinDrag -> Project.Project -> Project.Column -> Project.Node -> Int -> Html Msg
+viewNewColumnButton maybeJoinDrag project column node cardHeight =
+    let
+        isJoining =
+            maybeJoinDrag /= Nothing
+    in
+    button
+        ([ type_ "button"
+         , class "btn btn-outline-primary todo-graph-create-button"
+         , title "New column"
+         , attribute "aria-label" "New column"
+         , onClick (CreateFork column.id node.id)
+         , disabled (isJoining || not (Project.canCreateAfterNode node.id project))
+         , style "position" "absolute"
+         , style "left" (px (cardWidth + createButtonSideGap))
+         , style "bottom" (px (max 0 (cardHeight - createButtonSize)))
+         , style "z-index" "9"
+         ]
+            ++ hiddenStyles isJoining
+        )
+        [ FluentIcon.view FluentIcon.AddSquare ]
+
+
+viewCardFooter : Maybe JoinDrag -> Project.Project -> Maybe UUID -> Project.Column -> Int -> Project.Node -> List (Html Msg)
+viewCardFooter maybeJoinDrag project openAddMenu column index node =
     [ div
         [ class "card-footer p-2" ]
-        [ viewActionGroup maybeJoinDrag project openNewMenu openAddMenu column index node ]
+        [ viewActionGroup maybeJoinDrag project openAddMenu column index node ]
     ]
 
 
@@ -750,74 +798,17 @@ hiddenStyles hidden =
         []
 
 
-viewActionGroup : Maybe JoinDrag -> Project.Project -> Maybe UUID -> Maybe UUID -> Project.Column -> Int -> Project.Node -> Html Msg
-viewActionGroup maybeJoinDrag project openNewMenu openAddMenu column index node =
+viewActionGroup : Maybe JoinDrag -> Project.Project -> Maybe UUID -> Project.Column -> Int -> Project.Node -> Html Msg
+viewActionGroup maybeJoinDrag project openAddMenu column index node =
     div
         [ class "btn-group btn-group-sm"
         , attribute "role" "group"
         , style "position" "relative"
         ]
-        (viewNewDropdown maybeJoinDrag project openNewMenu column index node
-            ++ viewAddDropdown maybeJoinDrag openAddMenu column index node
+        (viewAddDropdown maybeJoinDrag openAddMenu column index node
             ++ viewJoinButton maybeJoinDrag column index node
             ++ viewDeleteButton maybeJoinDrag project node
         )
-
-
-viewNewDropdown : Maybe JoinDrag -> Project.Project -> Maybe UUID -> Project.Column -> Int -> Project.Node -> List (Html Msg)
-viewNewDropdown maybeJoinDrag project openNewMenu column index node =
-    let
-        canCreate =
-            Project.canCreateAfterNode node.id project
-
-        isJoining =
-            maybeJoinDrag /= Nothing
-
-        isOpen =
-            openNewMenu == Just node.id
-
-        opensUp =
-            nodeRowValue column index == 0
-    in
-    button
-        ([ type_ "button"
-         , class "btn btn-outline-primary btn-icon dropdown-toggle"
-         , title "New"
-         , attribute "aria-label" "New"
-         , onClick (ToggleNewMenu node.id)
-         , disabled (isJoining || not canCreate)
-         ]
-            ++ hiddenStyles isJoining
-        )
-        [ FluentIcon.view FluentIcon.AddSquare ]
-        :: (if not isJoining && canCreate && isOpen then
-                [ div
-                    ([ class "dropdown-menu show"
-                     , style "display" "block"
-                     , style "position" "absolute"
-                     , style "left" "0"
-                     , style "z-index" "20"
-                     ]
-                        ++ dropdownVerticalStyles opensUp
-                    )
-                    [ button
-                        [ type_ "button"
-                        , class "dropdown-item"
-                        , onClick (CreateTextNodeAfter node.id)
-                        ]
-                        [ text "New item" ]
-                    , button
-                        [ type_ "button"
-                        , class "dropdown-item"
-                        , onClick (CreateFork column.id node.id)
-                        ]
-                        [ text "New column" ]
-                    ]
-                ]
-
-            else
-                []
-           )
 
 
 viewAddDropdown : Maybe JoinDrag -> Maybe UUID -> Project.Column -> Int -> Project.Node -> List (Html Msg)
@@ -1485,7 +1476,7 @@ graphWidth columns =
         maxOrder =
             columnCount columns - 1
     in
-    (maxOrder * columnStep) + nodeGridWidth + 24
+    (maxOrder * columnStep) + nodeGridWidth + max 24 createButtonSideOverhang
 
 
 graphHeight : Model -> List Project.Column -> Int
@@ -1497,7 +1488,7 @@ graphHeight model columns =
     rows
         |> List.map (rowHeight model columns)
         |> List.sum
-        |> (+) (rowGap * max 0 (List.length rows - 1))
+        |> (+) ((rowGap * max 0 (List.length rows - 1)) + createButtonOverhang)
 
 
 adjacentPairs : List a -> List ( a, a )

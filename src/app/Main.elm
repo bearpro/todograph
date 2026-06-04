@@ -323,7 +323,6 @@ initTodoGraph project =
         , nodeUiStates = []
         , joinDrag = Nothing
         , now = Nothing
-        , openNewMenu = Nothing
         , openAddMenu = Nothing
         , nodeHeights = []
         }

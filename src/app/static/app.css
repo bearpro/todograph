@@ -59,6 +59,44 @@ body {
   margin-left: 0;
 }
 
+.todo-graph-create-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  color: var(--bs-primary);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.todo-graph-create-button:hover,
+.todo-graph-create-button:active,
+.todo-graph-create-button:focus {
+  color: var(--bs-primary);
+  background: transparent;
+  border-color: transparent;
+}
+
+.todo-graph-create-button:focus-visible {
+  box-shadow: 0 0 0 0.2rem rgba(var(--bs-primary-rgb), 0.25);
+}
+
+.todo-graph-create-button:disabled {
+  color: var(--bs-secondary-color);
+  background: transparent;
+  border-color: transparent;
+}
+
+.todo-graph-create-button .fluent-icon {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
 .app-layout {
   display: flex;
   min-height: calc(100vh - 57px);
