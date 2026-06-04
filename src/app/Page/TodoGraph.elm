@@ -639,15 +639,20 @@ view model =
     { title = Maybe.withDefault ("Project " ++ shortUuid model.project.id) model.project.name
     , body =
         [ div
-            [ style "min-height" "calc(100vh - 72px)"
+            [ style "height" "calc(100vh - 57px)"
             , style "overflow" "auto"
+            , style "box-sizing" "border-box"
             , style "background" "#fff"
-            , style "display" "flex"
-            , style "align-items" "flex-end"
-            , style "justify-content" "flex-start"
+            , style "padding" "1rem"
             ]
             [ div
-                [ id graphRootId
+                [ style "min-height" "100%"
+                , style "display" "flex"
+                , style "align-items" "flex-end"
+                , style "justify-content" "flex-start"
+                ]
+                [ div
+                    [ id graphRootId
                 , style "position" "relative"
                 , style "display" "grid"
                 , style "grid-template-columns" ("repeat(" ++ String.fromInt (columnCount sortedColumns) ++ ", " ++ px cardWidth ++ ")")
@@ -665,6 +670,7 @@ view model =
                     ++ viewDragEdge model sortedColumns model.joinDrag
                     ++ viewNodes hideButtons maxRow model sortedColumns
                 )
+                ]
             ]
         ]
     }

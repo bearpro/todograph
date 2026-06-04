@@ -1,9 +1,9 @@
-module Page.ProjectSelector exposing (Model, Msg(..), init, update, view)
+module Page.ProjectSelector exposing (Model, Msg(..), init, update, view, viewPanel)
 
 import Browser exposing (Document)
 import Browser.Dom as Dom
 import Domain.Project as DomainProject
-import Html exposing (Attribute, Html, a, button, div, input, li, text, ul)
+import Html exposing (Attribute, Html, a, button, div, h2, input, li, text, ul)
 import Html.Attributes as Attr exposing (class, disabled, type_, value)
 import Html.Events exposing (on, onClick, onInput)
 import Json.Decode as Decode
@@ -163,7 +163,9 @@ viewNewProjectButton model =
     case model.state of
         GeneratingNew ->
             button
-                [ disabled True ]
+                [ disabled True
+                , class "btn btn-primary"
+                ]
                 [ text "generating..." ]
 
         _ ->
@@ -179,40 +181,69 @@ projectDisplayName project =
         project.name
 
 
-viewProjectListItem : Maybe ProjectNameEdit -> Project -> Html Msg
-viewProjectListItem maybeEdit project =
+viewProjectListItem : Maybe UUID -> Maybe ProjectNameEdit -> Project -> Html Msg
+viewProjectListItem activeProjectId maybeEdit project =
     let
         isEditing =
             maybeEdit
                 |> Maybe.map (.id >> (==) project.id)
                 |> Maybe.withDefault False
+
+        isActive =
+            activeProjectId == Just project.id
     in
     li
-        [ class "list-group-item" ]
+        [ class
+            ("list-group-item"
+                ++ (if isActive then
+                        " active"
+
+                    else
+                        ""
+                   )
+            )
+        ]
         [ if isEditing then
-            viewProjectRename project maybeEdit
+            viewProjectRename isActive project maybeEdit
 
           else
-            viewProjectRow project
+            viewProjectRow isActive project
         ]
 
 
-viewProjectRow : Project -> Html Msg
-viewProjectRow project =
+viewProjectRow : Bool -> Project -> Html Msg
+viewProjectRow isActive project =
     div [ class "d-flex align-items-center gap-2" ]
         [ a
-            [ Route.href (Route.Project project.id), class "flex-grow-1" ]
+            [ Route.href (Route.Project project.id)
+            , onClick (OpenProject (UUID.toString project.id))
+            , class
+                ("flex-grow-1 text-decoration-none"
+                    ++ (if isActive then
+                            " text-white"
+
+                        else
+                            " text-body"
+                       )
+                )
+            ]
             [ text (projectDisplayName project) ]
         , button
             [ onClick (StartProjectRename project)
-            , class "btn btn-secondary btn-sm"
+            , class
+                (if isActive then
+                    "btn btn-light btn-sm"
+
+                 else
+                    "btn btn-secondary btn-sm"
+                )
             ]
             [ text "Rename" ]
         ]
 
 
-viewProjectRename : Project -> Maybe ProjectNameEdit -> Html Msg
-viewProjectRename project maybeEdit =
+viewProjectRename : Bool -> Project -> Maybe ProjectNameEdit -> Html Msg
+viewProjectRename isActive project maybeEdit =
     let
         draft =
             maybeEdit
@@ -236,7 +267,13 @@ viewProjectRename project maybeEdit =
             [ text "Save" ]
         , button
             [ onClick CancelProjectRename
-            , class "btn btn-outline-secondary btn-sm"
+            , class
+                (if isActive then
+                    "btn btn-outline-light btn-sm"
+
+                 else
+                    "btn btn-outline-secondary btn-sm"
+                )
             ]
             [ text "Cancel" ]
         ]
@@ -266,12 +303,25 @@ view : Model -> Document Msg
 view model =
     { title = "Projects"
     , body =
-        [ ul
+        [ viewPanel Nothing model ]
+    }
+
+
+viewPanel : Maybe UUID -> Model -> Html Msg
+viewPanel activeProjectId model =
+    div
+        [ class "project-selector-panel d-flex flex-column gap-3" ]
+        [ div
+            [ class "d-flex align-items-center justify-content-between gap-3" ]
+            [ h2
+                [ class "h5 mb-0" ]
+                [ text "Projects" ]
+            , viewNewProjectButton model
+            ]
+        , ul
             [ class "list-group" ]
             (List.map
-                (viewProjectListItem model.projectNameEdit)
+                (viewProjectListItem activeProjectId model.projectNameEdit)
                 model.projects
             )
-        , viewNewProjectButton model
         ]
-    }

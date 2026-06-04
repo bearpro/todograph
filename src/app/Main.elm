@@ -4,7 +4,9 @@ import Browser
 import Browser.Navigation as Nav
 import Control.Navbar
 import Domain.Project as Project
-import Html
+import Html exposing (Html)
+import Html.Attributes exposing (class)
+import Html.Events exposing (onClick)
 import Json.Decode as Decode
 import Page.AppInit as AppInitPage
 import Page.ProjectSelector as ProjectSelectorPage
@@ -21,15 +23,18 @@ import Url exposing (Url)
 type Page
     = AppInit AppInitPage.Model
     | TodoGraph TodoGraphPage.Model
-    | ProjectSelector ProjectSelectorPage.Model
+    | NoProjectSelected
 
 
 type alias Model =
     { page : Page
     , key : Nav.Key
     , projects : List Project.Project
+    , projectSelector : ProjectSelectorPage.Model
     , route : Maybe Route
     , storageError : Maybe String
+    , desktopSidebarVisible : Bool
+    , mobileSidebarOpen : Bool
     }
 
 
@@ -42,6 +47,9 @@ type Msg
     | StorageFailed String
     | FirstProjectGenerated UUID UUID
     | ProjectTimestampedForSave UUID Time.Posix
+    | ToggleDesktopSidebar
+    | ToggleMobileSidebar
+    | CloseMobileSidebar
 
 
 init : () -> Url -> Nav.Key -> ( Model, Cmd Msg )
@@ -49,8 +57,11 @@ init () url navKey =
     ( { page = AppInit AppInitPage.init
       , key = navKey
       , projects = []
+      , projectSelector = ProjectSelectorPage.init []
       , route = Route.fromUrl url
       , storageError = Nothing
+      , desktopSidebarVisible = True
+      , mobileSidebarOpen = False
       }
     , ProjectStorage.loadProjects ()
     )
@@ -62,7 +73,7 @@ currentRoute page =
         AppInit _ ->
             Route.ProjectSelector
 
-        ProjectSelector _ ->
+        NoProjectSelected ->
             Route.ProjectSelector
 
         TodoGraph model ->
@@ -79,34 +90,113 @@ currentProjectName page =
             Nothing
 
 
-mapDocument : Page -> (childMsg -> parentMsg) -> Browser.Document childMsg -> Browser.Document parentMsg
-mapDocument page toParent document =
-    { title = "TodoGraph | " ++ document.title
-    , body =
-        Control.Navbar.view
-            { currentPage = currentRoute page
-            , currentProjectName = currentProjectName page
+viewWorkspace : Page -> Browser.Document Msg
+viewWorkspace page =
+    case page of
+        AppInit model ->
+            mapDocument identity (AppInitPage.view model)
+
+        TodoGraph model ->
+            mapDocument TodoGraphMsg (TodoGraphPage.view model)
+
+        NoProjectSelected ->
+            { title = "Projects"
+            , body = []
             }
-            :: List.map (Html.map toParent) document.body
+
+
+mapDocument : (childMsg -> parentMsg) -> Browser.Document childMsg -> Browser.Document parentMsg
+mapDocument toParent document =
+    { title = document.title
+    , body = List.map (Html.map toParent) document.body
     }
 
 
-viewPage : Page -> Browser.Document Msg
-viewPage page =
+viewProjectSelectorPanel : Model -> Html Msg
+viewProjectSelectorPanel model =
+    ProjectSelectorPage.viewPanel (activeProjectId model.page) model.projectSelector
+        |> Html.map ProjectSelectorMsg
+
+
+activeProjectId : Page -> Maybe UUID
+activeProjectId page =
     case page of
-        AppInit model ->
-            mapDocument page identity (AppInitPage.view model)
+        TodoGraph todoGraphModel ->
+            Just todoGraphModel.project.id
 
-        TodoGraph model ->
-            mapDocument page TodoGraphMsg (TodoGraphPage.view model)
+        _ ->
+            Nothing
 
-        ProjectSelector model ->
-            mapDocument page ProjectSelectorMsg (ProjectSelectorPage.view model)
+
+viewDesktopSidebar : Model -> Html Msg
+viewDesktopSidebar model =
+    Html.aside
+        [ class
+            ("app-sidebar"
+                ++ (if model.desktopSidebarVisible then
+                        ""
+
+                    else
+                        " app-sidebar-hidden"
+                   )
+            )
+        ]
+        [ viewProjectSelectorPanel model ]
+
+
+viewMobileSidebar : Model -> List (Html Msg)
+viewMobileSidebar model =
+    if model.mobileSidebarOpen then
+        [ Html.div
+            [ class "app-sidebar-backdrop d-lg-none"
+            , onClick CloseMobileSidebar
+            ]
+            []
+        , Html.aside
+            [ class "app-mobile-sidebar d-lg-none" ]
+            [ Html.div
+                [ class "d-flex justify-content-end px-3 pt-3" ]
+                [ Html.button
+                    [ class "btn-close"
+                    , onClick CloseMobileSidebar
+                    ]
+                    []
+                ]
+            , viewProjectSelectorPanel model
+            ]
+        ]
+
+    else
+        []
+
+
+viewShell : Model -> Browser.Document Msg -> Browser.Document Msg
+viewShell model workspace =
+    { title = "TodoGraph | " ++ workspace.title
+    , body =
+        [ Control.Navbar.view
+            { currentPage = currentRoute model.page
+            , currentProjectName = currentProjectName model.page
+            , desktopSidebarVisible = model.desktopSidebarVisible
+            , onToggleDesktopSidebar = ToggleDesktopSidebar
+            , onToggleMobileSidebar = ToggleMobileSidebar
+            }
+        , Html.div
+            [ class "app-layout" ]
+            ([ viewDesktopSidebar model
+             , Html.main_
+                [ class "app-main" ]
+                workspace.body
+             ]
+                ++ viewMobileSidebar model
+            )
+        ]
+    }
 
 
 view : Model -> Browser.Document Msg
 view model =
-    viewPage model.page
+    viewShell model (viewWorkspace model.page)
 
 
 subscriptions : Model -> Sub Msg
@@ -129,16 +219,20 @@ changeRouteTo maybeRoute model =
     case maybeRoute of
         Nothing ->
             ( { model
-                | page = ProjectSelector (ProjectSelectorPage.init model.projects)
-                , route = maybeRoute
+                | page = NoProjectSelected
+                , projectSelector = ProjectSelectorPage.init model.projects
+                , route = Just Route.ProjectSelector
+                , mobileSidebarOpen = False
               }
             , Nav.replaceUrl model.key "/"
             )
 
         Just Route.ProjectSelector ->
             ( { model
-                | page = ProjectSelector (ProjectSelectorPage.init model.projects)
+                | page = NoProjectSelected
+                , projectSelector = ProjectSelectorPage.init model.projects
                 , route = maybeRoute
+                , mobileSidebarOpen = False
               }
             , Cmd.none
             )
@@ -152,15 +246,19 @@ changeRouteTo maybeRoute model =
                     in
                     ( { model
                         | page = TodoGraph todoGraphModel
+                        , projectSelector = ProjectSelectorPage.init model.projects
                         , route = maybeRoute
+                        , mobileSidebarOpen = False
                       }
                     , Cmd.map TodoGraphMsg cmd
                     )
 
                 Nothing ->
                     ( { model
-                        | page = ProjectSelector (ProjectSelectorPage.init model.projects)
+                        | page = NoProjectSelected
+                        , projectSelector = ProjectSelectorPage.init model.projects
                         , route = Just Route.ProjectSelector
+                        , mobileSidebarOpen = False
                       }
                     , Nav.replaceUrl model.key "/"
                     )
@@ -289,6 +387,21 @@ timestampProjectForSave projectId updatedAt model =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case ( msg, model.page ) of
+        ( ToggleDesktopSidebar, _ ) ->
+            ( { model | desktopSidebarVisible = not model.desktopSidebarVisible }
+            , Cmd.none
+            )
+
+        ( ToggleMobileSidebar, _ ) ->
+            ( { model | mobileSidebarOpen = not model.mobileSidebarOpen }
+            , Cmd.none
+            )
+
+        ( CloseMobileSidebar, _ ) ->
+            ( { model | mobileSidebarOpen = False }
+            , Cmd.none
+            )
+
         ( ClickedLink urlRequest, _ ) ->
             case urlRequest of
                 Browser.Internal url ->
@@ -309,18 +422,21 @@ update msg model =
         ( ChangedUrl url, _ ) ->
             changeRouteTo (Route.fromUrl url) model
 
-        ( ProjectSelectorMsg projectSelectorMsg, ProjectSelector page ) ->
+        ( ProjectSelectorMsg projectSelectorMsg, _ ) ->
             let
-                ( updatedPage, newCmd ) =
-                    ProjectSelectorPage.update projectSelectorMsg page
+                ( updatedSelector, newCmd ) =
+                    ProjectSelectorPage.update projectSelectorMsg model.projectSelector
 
                 pageCmd =
                     Cmd.map ProjectSelectorMsg newCmd
 
                 newModel =
-                    { model | page = ProjectSelector updatedPage }
+                    { model | projectSelector = updatedSelector }
             in
             case projectSelectorMsg of
+                ProjectSelectorPage.OpenProject _ ->
+                    ( { newModel | mobileSidebarOpen = False }, pageCmd )
+
                 ProjectSelectorPage.NewProjectGenerated projectId ->
                     let
                         newProject =
@@ -336,7 +452,7 @@ update msg model =
                 ProjectSelectorPage.SaveProjectName projectId ->
                     let
                         nextName =
-                            updatedPage.projects
+                            updatedSelector.projects
                                 |> List.filter (.id >> (==) projectId)
                                 |> List.head
                                 |> Maybe.andThen .name
@@ -355,8 +471,16 @@ update msg model =
                                         else
                                             Just nextProject
                                     )
+
+                        nextPage =
+                            maybeChangedProject
+                                |> Maybe.map (\changedProject -> replaceCurrentPageProject changedProject model.page)
+                                |> Maybe.withDefault model.page
                     in
-                    ( { newModel | projects = nextProjects }
+                    ( { newModel
+                        | projects = nextProjects
+                        , page = nextPage
+                      }
                     , cmdWithStorageSave pageCmd maybeChangedProject
                     )
 
