@@ -21,18 +21,18 @@ type alias Node =
 
 
 type alias ForkRef =
-    { sourceColumnId : UUID
+    { sourceChainId : UUID
     , sourceNodeId : UUID
     }
 
 
 type alias JoinRef =
-    { targetColumnId : UUID
+    { targetChainId : UUID
     , targetNodeId : UUID
     }
 
 
-type alias Column =
+type alias Chain =
     { id : UUID
     , order : Int
     , baseRow : Int
@@ -48,13 +48,13 @@ type alias Project =
     , name : Maybe String
     , updatedAt : Time.Posix
     , sync : Bool
-    , columns : List Column
+    , chains : List Chain
     }
 
 
 schemaVersion : Int
 schemaVersion =
-    2
+    3
 
 
 epoch : Time.Posix
@@ -177,7 +177,7 @@ nodeDecoder =
 forkRefEncoder : ForkRef -> Encode.Value
 forkRefEncoder ref =
     Encode.object
-        [ ( "sourceColumnId", uuidEncoder ref.sourceColumnId )
+        [ ( "sourceChainId", uuidEncoder ref.sourceChainId )
         , ( "sourceNodeId", uuidEncoder ref.sourceNodeId )
         ]
 
@@ -185,14 +185,14 @@ forkRefEncoder ref =
 forkRefDecoder : Decode.Decoder ForkRef
 forkRefDecoder =
     Decode.map2 ForkRef
-        (Decode.field "sourceColumnId" uuidDecoder)
+        (Decode.field "sourceChainId" uuidDecoder)
         (Decode.field "sourceNodeId" uuidDecoder)
 
 
 joinRefEncoder : JoinRef -> Encode.Value
 joinRefEncoder ref =
     Encode.object
-        [ ( "targetColumnId", uuidEncoder ref.targetColumnId )
+        [ ( "targetChainId", uuidEncoder ref.targetChainId )
         , ( "targetNodeId", uuidEncoder ref.targetNodeId )
         ]
 
@@ -200,26 +200,26 @@ joinRefEncoder ref =
 joinRefDecoder : Decode.Decoder JoinRef
 joinRefDecoder =
     Decode.map2 JoinRef
-        (Decode.field "targetColumnId" uuidDecoder)
+        (Decode.field "targetChainId" uuidDecoder)
         (Decode.field "targetNodeId" uuidDecoder)
 
 
-columnEncoder : Column -> Encode.Value
-columnEncoder column =
+chainEncoder : Chain -> Encode.Value
+chainEncoder chain =
     Encode.object
-        [ ( "id", uuidEncoder column.id )
-        , ( "order", Encode.int column.order )
-        , ( "baseRow", Encode.int column.baseRow )
-        , ( "name", maybeEncoder Encode.string column.name )
-        , ( "nodes", Encode.list nodeEncoder column.nodes )
-        , ( "forkedFrom", maybeEncoder forkRefEncoder column.forkedFrom )
-        , ( "joinedInto", maybeEncoder joinRefEncoder column.joinedInto )
+        [ ( "id", uuidEncoder chain.id )
+        , ( "order", Encode.int chain.order )
+        , ( "baseRow", Encode.int chain.baseRow )
+        , ( "name", maybeEncoder Encode.string chain.name )
+        , ( "nodes", Encode.list nodeEncoder chain.nodes )
+        , ( "forkedFrom", maybeEncoder forkRefEncoder chain.forkedFrom )
+        , ( "joinedInto", maybeEncoder joinRefEncoder chain.joinedInto )
         ]
 
 
-columnDecoder : Decode.Decoder Column
-columnDecoder =
-    Decode.map7 Column
+chainDecoder : Decode.Decoder Chain
+chainDecoder =
+    Decode.map7 Chain
         (Decode.field "id" uuidDecoder)
         (Decode.field "order" Decode.int)
         (Decode.field "baseRow" Decode.int)
@@ -237,7 +237,7 @@ projectEncoder project =
         , ( "name", maybeEncoder Encode.string project.name )
         , ( "updatedAt", updatedAtEncoder project.updatedAt )
         , ( "sync", Encode.bool project.sync )
-        , ( "columns", Encode.list columnEncoder project.columns )
+        , ( "chains", Encode.list chainEncoder project.chains )
         ]
 
 
@@ -248,7 +248,7 @@ projectPayloadEncoder project =
         , ( "id", uuidEncoder project.id )
         , ( "name", maybeEncoder Encode.string project.name )
         , ( "updatedAt", updatedAtEncoder project.updatedAt )
-        , ( "columns", Encode.list columnEncoder project.columns )
+        , ( "chains", Encode.list chainEncoder project.chains )
         ]
 
 
@@ -267,7 +267,7 @@ projectDecoder =
                             , Decode.succeed False
                             ]
                         )
-                        (Decode.field "columns" (Decode.list columnDecoder))
+                        (Decode.field "chains" (Decode.list chainDecoder))
 
                 else
                     Decode.fail ("Unsupported project schema version: " ++ String.fromInt version)
@@ -311,7 +311,7 @@ initialProject projectId firstNodeId =
     , name = Nothing
     , updatedAt = epoch
     , sync = False
-    , columns =
+    , chains =
         [ { id = projectId
           , order = 0
           , baseRow = 0
@@ -325,17 +325,17 @@ initialProject projectId firstNodeId =
 
 
 appendNode : UUID -> Node -> Project -> Project
-appendNode columnId node project =
+appendNode chainId node project =
     { project
-        | columns =
-            project.columns
+        | chains =
+            project.chains
                 |> List.map
-                    (\column ->
-                        if column.id == columnId then
-                            { column | nodes = column.nodes ++ [ node ] }
+                    (\chain ->
+                        if chain.id == chainId then
+                            { chain | nodes = chain.nodes ++ [ node ] }
 
                         else
-                            column
+                            chain
                     )
     }
 
@@ -343,18 +343,18 @@ appendNode columnId node project =
 insertNodeAfter : UUID -> Node -> Project -> Project
 insertNodeAfter afterNodeId newNode project =
     { project
-        | columns =
-            project.columns
+        | chains =
+            project.chains
                 |> List.map
-                    (\column ->
-                        { column
+                    (\chain ->
+                        { chain
                             | nodes =
-                                column.nodes
+                                chain.nodes
                                     |> insertNodeAfterInList afterNodeId newNode
                         }
                     )
     }
-        |> realignForkColumnBaseRows
+        |> realignForkChainBaseRows
 
 
 insertNodeAfterInList : UUID -> Node -> List Node -> List Node
@@ -374,13 +374,13 @@ insertNodeAfterInList afterNodeId newNode nodes =
 updateNode : UUID -> Node -> Project -> Project
 updateNode nodeId updatedNode project =
     { project
-        | columns =
-            project.columns
+        | chains =
+            project.chains
                 |> List.map
-                    (\column ->
-                        { column
+                    (\chain ->
+                        { chain
                             | nodes =
-                                column.nodes
+                                chain.nodes
                                     |> List.map
                                         (\node ->
                                             if node.id == nodeId then
@@ -425,13 +425,13 @@ addDescriptionToNode nodeId project =
 updateNodeIf : UUID -> (Node -> Node) -> Project -> Project
 updateNodeIf nodeId update project =
     { project
-        | columns =
-            project.columns
+        | chains =
+            project.chains
                 |> List.map
-                    (\column ->
-                        { column
+                    (\chain ->
+                        { chain
                             | nodes =
-                                column.nodes
+                                chain.nodes
                                     |> List.map
                                         (\node ->
                                             if node.id == nodeId then
@@ -445,80 +445,80 @@ updateNodeIf nodeId update project =
     }
 
 
-forkColumn : UUID -> UUID -> UUID -> Node -> Project -> Project
-forkColumn sourceColumnId sourceNodeId newColumnId firstNode project =
+forkChain : UUID -> UUID -> UUID -> Node -> Project -> Project
+forkChain sourceChainId sourceNodeId newChainId firstNode project =
     let
-        sourceColumn =
-            findColumn sourceColumnId project.columns
+        sourceChain =
+            findChain sourceChainId project.chains
 
         sourceOrder =
-            sourceColumn
+            sourceChain
                 |> Maybe.map .order
                 |> Maybe.withDefault 0
 
         sourceRow =
-            sourceColumn
+            sourceChain
                 |> Maybe.map
-                    (\column ->
-                        column.baseRow
-                            + Maybe.withDefault 0 (nodeIndex sourceNodeId column.nodes)
+                    (\chain ->
+                        chain.baseRow
+                            + Maybe.withDefault 0 (nodeIndex sourceNodeId chain.nodes)
                     )
                 |> Maybe.withDefault 0
 
-        shiftedColumns =
-            project.columns
+        shiftedChains =
+            project.chains
                 |> List.map
-                    (\column ->
-                        if column.order > sourceOrder then
-                            { column | order = column.order + 1 }
+                    (\chain ->
+                        if chain.order > sourceOrder then
+                            { chain | order = chain.order + 1 }
 
                         else
-                            column
+                            chain
                     )
 
-        newColumn =
-            { id = newColumnId
+        newChain =
+            { id = newChainId
             , order = sourceOrder + 1
             , baseRow = sourceRow
             , name = Nothing
             , nodes = [ firstNode ]
             , forkedFrom =
                 Just
-                    { sourceColumnId = sourceColumnId
+                    { sourceChainId = sourceChainId
                     , sourceNodeId = sourceNodeId
                     }
             , joinedInto = Nothing
             }
     in
-    { project | columns = sortColumns (newColumn :: shiftedColumns) }
+    { project | chains = sortChains (newChain :: shiftedChains) }
 
 
-joinColumnIntoPrevious : UUID -> Project -> Project
-joinColumnIntoPrevious columnId project =
-    case findColumn columnId project.columns of
-        Just column ->
-            project.columns
-                |> List.filter (\candidate -> candidate.order < column.order)
-                |> sortColumns
+joinChainIntoPrevious : UUID -> Project -> Project
+joinChainIntoPrevious chainId project =
+    case findChain chainId project.chains of
+        Just chain ->
+            project.chains
+                |> List.filter (\candidate -> candidate.order < chain.order)
+                |> sortChains
                 |> List.reverse
                 |> List.head
                 |> Maybe.andThen
-                    (\targetColumn ->
-                        lastNode targetColumn
-                            |> Maybe.map (\targetNode -> ( targetColumn, targetNode ))
+                    (\targetChain ->
+                        lastNode targetChain
+                            |> Maybe.map (\targetNode -> ( targetChain, targetNode ))
                     )
                 |> Maybe.map
-                    (\( targetColumn, targetNode ) ->
+                    (\( targetChain, targetNode ) ->
                         { project
-                            | columns =
-                                project.columns
+                            | chains =
+                                project.chains
                                     |> List.map
                                         (\candidate ->
-                                            if candidate.id == columnId then
+                                            if candidate.id == chainId then
                                                 { candidate
                                                     | joinedInto =
                                                         Just
-                                                            { targetColumnId = targetColumn.id
+                                                            { targetChainId = targetChain.id
                                                             , targetNodeId = targetNode.id
                                                             }
                                                 }
@@ -534,27 +534,27 @@ joinColumnIntoPrevious columnId project =
             project
 
 
-joinColumnToNode : UUID -> UUID -> Project -> Project
-joinColumnToNode sourceColumnId targetNodeId project =
-    if canJoinColumnToNode sourceColumnId targetNodeId project then
+joinChainToNode : UUID -> UUID -> Project -> Project
+joinChainToNode sourceChainId targetNodeId project =
+    if canJoinChainToNode sourceChainId targetNodeId project then
         case locateNode targetNodeId project of
-            Just ( targetColumn, targetNode ) ->
+            Just ( targetChain, targetNode ) ->
                 { project
-                    | columns =
-                        project.columns
+                    | chains =
+                        project.chains
                             |> List.map
-                                (\column ->
-                                    if column.id == sourceColumnId then
-                                        { column
+                                (\chain ->
+                                    if chain.id == sourceChainId then
+                                        { chain
                                             | joinedInto =
                                                 Just
-                                                    { targetColumnId = targetColumn.id
+                                                    { targetChainId = targetChain.id
                                                     , targetNodeId = targetNode.id
                                                     }
                                         }
 
                                     else
-                                        column
+                                        chain
                                 )
                 }
 
@@ -565,31 +565,31 @@ joinColumnToNode sourceColumnId targetNodeId project =
         project
 
 
-unjoinColumn : UUID -> Project -> Project
-unjoinColumn columnId project =
+unjoinChain : UUID -> Project -> Project
+unjoinChain chainId project =
     { project
-        | columns =
-            project.columns
+        | chains =
+            project.chains
                 |> List.map
-                    (\column ->
-                        if column.id == columnId then
-                            { column | joinedInto = Nothing }
+                    (\chain ->
+                        if chain.id == chainId then
+                            { chain | joinedInto = Nothing }
 
                         else
-                            column
+                            chain
                     )
     }
 
 
-canJoinColumnToNode : UUID -> UUID -> Project -> Bool
-canJoinColumnToNode sourceColumnId targetNodeId project =
-    case ( findColumn sourceColumnId project.columns, locateNode targetNodeId project ) of
-        ( Just sourceColumn, Just ( targetColumn, _ ) ) ->
-            case lastNode sourceColumn of
+canJoinChainToNode : UUID -> UUID -> Project -> Bool
+canJoinChainToNode sourceChainId targetNodeId project =
+    case ( findChain sourceChainId project.chains, locateNode targetNodeId project ) of
+        ( Just sourceChain, Just ( targetChain, _ ) ) ->
+            case lastNode sourceChain of
                 Just sourceNode ->
-                    sourceColumn.id
-                        /= targetColumn.id
-                        && sourceColumn.joinedInto
+                    sourceChain.id
+                        /= targetChain.id
+                        && sourceChain.joinedInto
                         == Nothing
                         && not (isReachable targetNodeId sourceNode.id project)
 
@@ -647,15 +647,15 @@ directedNeighborNodeIds nodeId project =
 
 directedEdges : Project -> List ( UUID, UUID )
 directedEdges project =
-    project.columns
-        |> List.concatMap columnDirectedEdges
+    project.chains
+        |> List.concatMap chainDirectedEdges
 
 
-columnDirectedEdges : Column -> List ( UUID, UUID )
-columnDirectedEdges column =
-    verticalDirectedEdges column.nodes
-        ++ forkDirectedEdge column
-        ++ joinDirectedEdge column
+chainDirectedEdges : Chain -> List ( UUID, UUID )
+chainDirectedEdges chain =
+    verticalDirectedEdges chain.nodes
+        ++ forkDirectedEdge chain
+        ++ joinDirectedEdge chain
 
 
 verticalDirectedEdges : List Node -> List ( UUID, UUID )
@@ -668,9 +668,9 @@ verticalDirectedEdges nodes =
             []
 
 
-forkDirectedEdge : Column -> List ( UUID, UUID )
-forkDirectedEdge column =
-    case ( column.forkedFrom, column.nodes ) of
+forkDirectedEdge : Chain -> List ( UUID, UUID )
+forkDirectedEdge chain =
+    case ( chain.forkedFrom, chain.nodes ) of
         ( Just forkRef, firstNode :: _ ) ->
             [ ( forkRef.sourceNodeId, firstNode.id ) ]
 
@@ -678,9 +678,9 @@ forkDirectedEdge column =
             []
 
 
-joinDirectedEdge : Column -> List ( UUID, UUID )
-joinDirectedEdge column =
-    case ( column.joinedInto, lastNode column ) of
+joinDirectedEdge : Chain -> List ( UUID, UUID )
+joinDirectedEdge chain =
+    case ( chain.joinedInto, lastNode chain ) of
         ( Just joinRef, Just sourceNode ) ->
             [ ( sourceNode.id, joinRef.targetNodeId ) ]
 
@@ -691,17 +691,17 @@ joinDirectedEdge column =
 canDeleteNode : UUID -> Project -> Bool
 canDeleteNode nodeId project =
     case locateNode nodeId project of
-        Just ( column, _ ) ->
-            if canDeleteForkEntryNode nodeId column project then
+        Just ( chain, _ ) ->
+            if canDeleteForkEntryNode nodeId chain project then
                 True
 
-            else if isJoinSource nodeId column then
+            else if isJoinSource nodeId chain then
                 not (isForkSource nodeId project)
-                    && not (isForkEntryNode nodeId column)
+                    && not (isForkEntryNode nodeId chain)
                     && not (isJoinTarget nodeId project)
 
             else
-                not (hasInterColumnEdge nodeId project)
+                not (hasInterChainEdge nodeId project)
 
         Nothing ->
             False
@@ -710,19 +710,19 @@ canDeleteNode nodeId project =
 deleteNode : UUID -> Project -> Project
 deleteNode nodeId project =
     case locateNode nodeId project of
-        Just ( column, _ ) ->
-            if canDeleteForkEntryNode nodeId column project then
-                deleteColumn column.id project
+        Just ( chain, _ ) ->
+            if canDeleteForkEntryNode nodeId chain project then
+                deleteChain chain.id project
 
-            else if isJoinSource nodeId column then
+            else if isJoinSource nodeId chain then
                 if canDeleteNode nodeId project then
-                    deleteNodeFromColumn True column.id nodeId project
+                    deleteNodeFromChain True chain.id nodeId project
 
                 else
                     project
 
             else if canDeleteNode nodeId project then
-                deleteNodeFromColumn False column.id nodeId project
+                deleteNodeFromChain False chain.id nodeId project
 
             else
                 project
@@ -731,98 +731,98 @@ deleteNode nodeId project =
             project
 
 
-deleteNodeFromColumn : Bool -> UUID -> UUID -> Project -> Project
-deleteNodeFromColumn clearJoin columnId nodeId project =
+deleteNodeFromChain : Bool -> UUID -> UUID -> Project -> Project
+deleteNodeFromChain clearJoin chainId nodeId project =
     { project
-        | columns =
-            project.columns
+        | chains =
+            project.chains
                 |> List.map
-                    (\column ->
-                        if column.id == columnId then
-                            { column
+                    (\chain ->
+                        if chain.id == chainId then
+                            { chain
                                 | nodes =
-                                    column.nodes
+                                    chain.nodes
                                         |> List.filter (.id >> (/=) nodeId)
                                 , joinedInto =
                                     if clearJoin then
                                         Nothing
 
                                     else
-                                        column.joinedInto
+                                        chain.joinedInto
                             }
 
                         else
-                            column
+                            chain
                     )
     }
-        |> realignForkColumnBaseRows
+        |> realignForkChainBaseRows
 
 
-deleteColumn : UUID -> Project -> Project
-deleteColumn columnId project =
+deleteChain : UUID -> Project -> Project
+deleteChain chainId project =
     { project
-        | columns =
-            project.columns
-                |> List.filter (.id >> (/=) columnId)
-                |> normalizeColumnOrders
+        | chains =
+            project.chains
+                |> List.filter (.id >> (/=) chainId)
+                |> normalizeChainOrders
     }
-        |> realignForkColumnBaseRows
+        |> realignForkChainBaseRows
 
 
-realignForkColumnBaseRows : Project -> Project
-realignForkColumnBaseRows project =
+realignForkChainBaseRows : Project -> Project
+realignForkChainBaseRows project =
     let
-        alignColumns remainingColumns alignedColumns =
-            case remainingColumns of
-                column :: rest ->
+        alignChains remainingChains alignedChains =
+            case remainingChains of
+                chain :: rest ->
                     let
-                        alignedColumn =
-                            case column.forkedFrom of
+                        alignedChain =
+                            case chain.forkedFrom of
                                 Just forkRef ->
-                                    alignedColumns
-                                        |> findColumn forkRef.sourceColumnId
-                                        |> Maybe.andThen (\sourceColumn -> nodeRow sourceColumn forkRef.sourceNodeId)
-                                        |> Maybe.map (\sourceRow -> { column | baseRow = sourceRow })
-                                        |> Maybe.withDefault column
+                                    alignedChains
+                                        |> findChain forkRef.sourceChainId
+                                        |> Maybe.andThen (\sourceChain -> nodeRow sourceChain forkRef.sourceNodeId)
+                                        |> Maybe.map (\sourceRow -> { chain | baseRow = sourceRow })
+                                        |> Maybe.withDefault chain
 
                                 Nothing ->
-                                    column
+                                    chain
                     in
-                    alignColumns rest (alignedColumn :: alignedColumns)
+                    alignChains rest (alignedChain :: alignedChains)
 
                 [] ->
-                    alignedColumns
+                    alignedChains
                         |> List.reverse
     in
-    { project | columns = alignColumns (sortColumns project.columns) [] }
+    { project | chains = alignChains (sortChains project.chains) [] }
 
 
-normalizeColumnOrders : List Column -> List Column
-normalizeColumnOrders columns =
-    columns
-        |> sortColumns
-        |> List.indexedMap (\index column -> { column | order = index })
+normalizeChainOrders : List Chain -> List Chain
+normalizeChainOrders chains =
+    chains
+        |> sortChains
+        |> List.indexedMap (\index chain -> { chain | order = index })
 
 
-hasInterColumnEdge : UUID -> Project -> Bool
-hasInterColumnEdge nodeId project =
+hasInterChainEdge : UUID -> Project -> Bool
+hasInterChainEdge nodeId project =
     isForkSource nodeId project
         || isForkTarget nodeId project
         || isJoinSourceInProject nodeId project
         || isJoinTarget nodeId project
 
 
-canDeleteForkEntryNode : UUID -> Column -> Project -> Bool
-canDeleteForkEntryNode nodeId column project =
-    isForkEntryNode nodeId column
-        && (List.length column.nodes == 1)
+canDeleteForkEntryNode : UUID -> Chain -> Project -> Bool
+canDeleteForkEntryNode nodeId chain project =
+    isForkEntryNode nodeId chain
+        && (List.length chain.nodes == 1)
         && not (isForkSource nodeId project)
         && not (isJoinTarget nodeId project)
 
 
-isForkEntryNode : UUID -> Column -> Bool
-isForkEntryNode nodeId column =
-    case ( column.forkedFrom, column.nodes ) of
+isForkEntryNode : UUID -> Chain -> Bool
+isForkEntryNode nodeId chain =
+    case ( chain.forkedFrom, chain.nodes ) of
         ( Just _, firstNode :: _ ) ->
             firstNode.id == nodeId
 
@@ -832,10 +832,10 @@ isForkEntryNode nodeId column =
 
 isForkSource : UUID -> Project -> Bool
 isForkSource nodeId project =
-    project.columns
+    project.chains
         |> List.any
-            (\column ->
-                column.forkedFrom
+            (\chain ->
+                chain.forkedFrom
                     |> Maybe.map (.sourceNodeId >> (==) nodeId)
                     |> Maybe.withDefault False
             )
@@ -843,15 +843,15 @@ isForkSource nodeId project =
 
 isForkTarget : UUID -> Project -> Bool
 isForkTarget nodeId project =
-    project.columns
+    project.chains
         |> List.any (isForkEntryNode nodeId)
 
 
-isJoinSource : UUID -> Column -> Bool
-isJoinSource nodeId column =
-    case column.joinedInto of
+isJoinSource : UUID -> Chain -> Bool
+isJoinSource nodeId chain =
+    case chain.joinedInto of
         Just _ ->
-            column
+            chain
                 |> lastNode
                 |> Maybe.map (.id >> (==) nodeId)
                 |> Maybe.withDefault False
@@ -862,42 +862,42 @@ isJoinSource nodeId column =
 
 isJoinSourceInProject : UUID -> Project -> Bool
 isJoinSourceInProject nodeId project =
-    project.columns
+    project.chains
         |> List.any (isJoinSource nodeId)
 
 
 isJoinTarget : UUID -> Project -> Bool
 isJoinTarget nodeId project =
-    project.columns
+    project.chains
         |> List.any
-            (\column ->
-                column.joinedInto
+            (\chain ->
+                chain.joinedInto
                     |> Maybe.map (.targetNodeId >> (==) nodeId)
                     |> Maybe.withDefault False
             )
 
 
-locateNode : UUID -> Project -> Maybe ( Column, Node )
+locateNode : UUID -> Project -> Maybe ( Chain, Node )
 locateNode nodeId project =
-    project.columns
+    project.chains
         |> List.filterMap
-            (\column ->
-                findNodeInColumn nodeId column
-                    |> Maybe.map (\node -> ( column, node ))
+            (\chain ->
+                findNodeInChain nodeId chain
+                    |> Maybe.map (\node -> ( chain, node ))
             )
         |> List.head
 
 
-findColumn : UUID -> List Column -> Maybe Column
-findColumn columnId columns =
-    columns
-        |> List.filter (.id >> (==) columnId)
+findChain : UUID -> List Chain -> Maybe Chain
+findChain chainId chains =
+    chains
+        |> List.filter (.id >> (==) chainId)
         |> List.head
 
 
-findNodeInColumn : UUID -> Column -> Maybe Node
-findNodeInColumn nodeId column =
-    column.nodes
+findNodeInChain : UUID -> Chain -> Maybe Node
+findNodeInChain nodeId chain =
+    chain.nodes
         |> List.filter (.id >> (==) nodeId)
         |> List.head
 
@@ -911,19 +911,19 @@ nodeIndex nodeId nodes =
         |> Maybe.map Tuple.first
 
 
-nodeRow : Column -> UUID -> Maybe Int
-nodeRow column nodeId =
-    nodeIndex nodeId column.nodes
-        |> Maybe.map (\index -> column.baseRow + index)
+nodeRow : Chain -> UUID -> Maybe Int
+nodeRow chain nodeId =
+    nodeIndex nodeId chain.nodes
+        |> Maybe.map (\index -> chain.baseRow + index)
 
 
-lastNode : Column -> Maybe Node
-lastNode column =
-    column.nodes
+lastNode : Chain -> Maybe Node
+lastNode chain =
+    chain.nodes
         |> List.reverse
         |> List.head
 
 
-sortColumns : List Column -> List Column
-sortColumns columns =
-    List.sortBy .order columns
+sortChains : List Chain -> List Chain
+sortChains chains =
+    List.sortBy (\chain -> ( chain.order, UUID.toString chain.id )) chains

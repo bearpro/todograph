@@ -10,6 +10,7 @@ import Html exposing (Html, button, div, text)
 import Html.Attributes exposing (attribute, class, disabled, id, style, title, type_)
 import Html.Events exposing (custom, on, onClick, onMouseEnter, onMouseLeave)
 import Json.Decode as Decode
+import Page.TodoGraph.Layout as Layout
 import Platform.Cmd as Cmd
 import Random
 import Task
@@ -40,7 +41,7 @@ type alias NodeHeight =
 
 
 type alias JoinDrag =
-    { sourceColumnId : UUID
+    { sourceChainId : UUID
     , sourceNodeId : UUID
     , mode : JoinMode
     , startMouse : MousePoint
@@ -244,23 +245,23 @@ update msg model =
                 ]
             )
 
-        CreateFork sourceColumnId sourceNodeId ->
+        CreateFork sourceChainId sourceNodeId ->
             ( model
             , Random.generate
-                (\( columnId, nodeId ) ->
-                    ForkGenerated sourceColumnId sourceNodeId columnId nodeId
+                (\( chainId, nodeId ) ->
+                    ForkGenerated sourceChainId sourceNodeId chainId nodeId
                 )
                 (Random.map2 Tuple.pair UUID.generator UUID.generator)
             )
 
-        ForkGenerated sourceColumnId sourceNodeId columnId nodeId ->
+        ForkGenerated sourceChainId sourceNodeId chainId nodeId ->
             let
                 nextProject =
                     model.project
-                        |> Project.forkColumn
-                            sourceColumnId
+                        |> Project.forkChain
+                            sourceChainId
                             sourceNodeId
-                            columnId
+                            chainId
                             (Project.textNode nodeId "item")
             in
             ( { model
@@ -270,22 +271,22 @@ update msg model =
             , measureProjectNodes nextProject
             )
 
-        StartJoinPress sourceColumnId sourceNodeId pointer ->
+        StartJoinPress sourceChainId sourceNodeId pointer ->
             case model.joinDrag of
                 Just joinDrag ->
                     if joinDrag.mode == JoinLatched && joinDrag.sourceNodeId == sourceNodeId then
                         ( { model | joinDrag = Nothing, openAddMenu = Nothing }, Cmd.none )
 
                     else
-                        startJoinPress sourceColumnId sourceNodeId pointer model
+                        startJoinPress sourceChainId sourceNodeId pointer model
 
                 Nothing ->
-                    startJoinPress sourceColumnId sourceNodeId pointer model
+                    startJoinPress sourceChainId sourceNodeId pointer model
 
-        Unjoin columnId ->
+        Unjoin chainId ->
             let
                 nextProject =
-                    Project.unjoinColumn columnId model.project
+                    Project.unjoinChain chainId model.project
             in
             ( { model
                 | project = nextProject
@@ -420,7 +421,7 @@ update msg model =
                     model.joinDrag
                         |> Maybe.map
                             (\joinDrag ->
-                                if Project.canJoinColumnToNode joinDrag.sourceColumnId nodeId model.project then
+                                if Project.canJoinChainToNode joinDrag.sourceChainId nodeId model.project then
                                     { joinDrag | hoveredNodeId = Just nodeId }
 
                                 else
@@ -476,11 +477,11 @@ update msg model =
 
 
 startJoinPress : UUID -> UUID -> JoinPointer -> Model -> ( Model, Cmd Msg )
-startJoinPress sourceColumnId sourceNodeId pointer model =
+startJoinPress sourceChainId sourceNodeId pointer model =
     ( { model
         | joinDrag =
             Just
-                { sourceColumnId = sourceColumnId
+                { sourceChainId = sourceChainId
                 , sourceNodeId = sourceNodeId
                 , mode = JoinPressing
                 , startMouse = pointer.point
@@ -605,14 +606,14 @@ releaseJoinNodePointer nodeId pointer joinDrag model =
                 ( model, Cmd.none )
 
         JoinDragging ->
-            if Project.canJoinColumnToNode joinDrag.sourceColumnId nodeId model.project then
+            if Project.canJoinChainToNode joinDrag.sourceChainId nodeId model.project then
                 finishJoin (Just nodeId) model
 
             else
                 cancelJoin model
 
         JoinLatched ->
-            if Project.canJoinColumnToNode joinDrag.sourceColumnId nodeId model.project then
+            if Project.canJoinChainToNode joinDrag.sourceChainId nodeId model.project then
                 finishJoin (Just nodeId) model
 
             else
@@ -634,10 +635,10 @@ finishJoin maybeTargetNodeId model =
         Just joinDrag ->
             case maybeTargetNodeId of
                 Just targetNodeId ->
-                    if Project.canJoinColumnToNode joinDrag.sourceColumnId targetNodeId model.project then
+                    if Project.canJoinChainToNode joinDrag.sourceChainId targetNodeId model.project then
                         let
                             nextProject =
-                                Project.joinColumnToNode joinDrag.sourceColumnId targetNodeId model.project
+                                Project.joinChainToNode joinDrag.sourceChainId targetNodeId model.project
                         in
                         ( { model
                             | project = nextProject
@@ -710,7 +711,7 @@ subscriptions model =
 
 hasRunningTimer : Project.Project -> Bool
 hasRunningTimer project =
-    project.columns
+    project.chains
         |> List.concatMap .nodes
         |> List.any
             (\node ->
@@ -835,7 +836,7 @@ upsertNodeEditState nodeId editState nodeUiStates =
 
 measureProjectNodes : Project.Project -> Cmd Msg
 measureProjectNodes project =
-    project.columns
+    project.chains
         |> List.concatMap .nodes
         |> List.map
             (\node ->
@@ -878,7 +879,7 @@ upsertNodeHeight nextHeight nodeHeights =
 
 findNode : UUID -> Project.Project -> Maybe Project.Node
 findNode nodeId project =
-    project.columns
+    project.chains
         |> List.concatMap .nodes
         |> List.filter (.id >> (==) nodeId)
         |> List.head
@@ -887,12 +888,20 @@ findNode nodeId project =
 view : Model -> Document Msg
 view model =
     let
-        sortedColumns =
-            model.project.columns
-                |> Project.sortColumns
+        renderChains =
+            model.project.chains
+                |> Layout.layoutChains
+                |> List.map
+                    (\layout ->
+                        let
+                            chain =
+                                layout.chain
+                        in
+                        { chain | order = layout.physicalColumn }
+                    )
 
         maxRow =
-            maxGraphRow sortedColumns
+            maxGraphRow renderChains
 
         hideButtons =
             model.joinDrag /= Nothing
@@ -916,22 +925,22 @@ view model =
                     ([ id graphRootId
                      , style "position" "relative"
                      , style "display" "grid"
-                     , style "grid-template-columns" ("repeat(" ++ String.fromInt (columnCount sortedColumns) ++ ", " ++ px cardWidth ++ ")")
-                     , style "grid-template-rows" (gridTemplateRows model sortedColumns)
+                     , style "grid-template-columns" ("repeat(" ++ String.fromInt (columnCount renderChains) ++ ", " ++ px cardWidth ++ ")")
+                     , style "grid-template-rows" (gridTemplateRows model renderChains)
                      , style "column-gap" (px columnGap)
                      , style "row-gap" (px rowGap)
                      , style "align-content" "end"
                      , style "justify-content" "start"
-                     , style "width" (px (graphWidth sortedColumns))
-                     , style "height" (px (graphHeight model sortedColumns))
-                     , style "min-width" (px (graphWidth sortedColumns))
-                     , style "min-height" (px (graphHeight model sortedColumns))
+                     , style "width" (px (graphWidth renderChains))
+                     , style "height" (px (graphHeight model renderChains))
+                     , style "min-width" (px (graphWidth renderChains))
+                     , style "min-height" (px (graphHeight model renderChains))
                      ]
                         ++ joinGraphPointerAttributes model.joinDrag
                     )
-                    (viewEdges model sortedColumns
-                        ++ viewDragEdge model sortedColumns model.joinDrag
-                        ++ viewNodes hideButtons maxRow model sortedColumns
+                    (viewEdges model renderChains
+                        ++ viewDragEdge model renderChains model.joinDrag
+                        ++ viewNodes hideButtons maxRow model renderChains
                     )
                 ]
             ]
@@ -939,7 +948,7 @@ view model =
     }
 
 
-viewNodes : Bool -> Int -> Model -> List Project.Column -> List (Html Msg)
+viewNodes : Bool -> Int -> Model -> List Project.Chain -> List (Html Msg)
 viewNodes hideButtons maxRow model columns =
     columns
         |> List.concatMap
@@ -949,7 +958,7 @@ viewNodes hideButtons maxRow model columns =
             )
 
 
-viewNode : Bool -> Int -> Model -> List Project.Column -> Project.Column -> Int -> Project.Node -> Html Msg
+viewNode : Bool -> Int -> Model -> List Project.Chain -> Project.Chain -> Int -> Project.Node -> Html Msg
 viewNode hideButtons maxRow model columns column index node =
     let
         currentRow =
@@ -987,7 +996,7 @@ viewNode hideButtons maxRow model columns column index node =
             ++ joinNodePointerAttributes model.joinDrag node.id
         )
         [ viewNewItemButton model.joinDrag model.project node cardHeight
-        , viewNewColumnButton model.joinDrag model.project column node cardHeight
+        , viewNewChainButton model.joinDrag model.project column node cardHeight
         , div
             ([ class "card d-flex flex-column"
              , id (nodeCardId node.id)
@@ -1028,8 +1037,8 @@ viewNewItemButton maybeJoinDrag project node cardHeight =
         [ FluentIcon.view FluentIcon.AddSquare ]
 
 
-viewNewColumnButton : Maybe JoinDrag -> Project.Project -> Project.Column -> Project.Node -> Int -> Html Msg
-viewNewColumnButton maybeJoinDrag project column node cardHeight =
+viewNewChainButton : Maybe JoinDrag -> Project.Project -> Project.Chain -> Project.Node -> Int -> Html Msg
+viewNewChainButton maybeJoinDrag project column node cardHeight =
     let
         isJoining =
             maybeJoinDrag /= Nothing
@@ -1037,8 +1046,8 @@ viewNewColumnButton maybeJoinDrag project column node cardHeight =
     button
         ([ type_ "button"
          , class "btn btn-outline-primary todo-graph-create-button"
-         , title "New column"
-         , attribute "aria-label" "New column"
+         , title "New chain"
+         , attribute "aria-label" "New chain"
          , onClick (CreateFork column.id node.id)
          , disabled (isJoining || not (Project.canCreateAfterNode node.id project))
          , style "position" "absolute"
@@ -1051,7 +1060,7 @@ viewNewColumnButton maybeJoinDrag project column node cardHeight =
         [ FluentIcon.view FluentIcon.AddSquare ]
 
 
-viewCardFooter : Maybe JoinDrag -> Project.Project -> Maybe UUID -> Project.Column -> Int -> Project.Node -> List (Html Msg)
+viewCardFooter : Maybe JoinDrag -> Project.Project -> Maybe UUID -> Project.Chain -> Int -> Project.Node -> List (Html Msg)
 viewCardFooter maybeJoinDrag project openAddMenu column index node =
     [ div
         [ class "card-footer p-2" ]
@@ -1109,7 +1118,7 @@ onPointerStopAndPrevent eventName toMsg =
         )
 
 
-viewActionGroup : Maybe JoinDrag -> Project.Project -> Maybe UUID -> Project.Column -> Int -> Project.Node -> Html Msg
+viewActionGroup : Maybe JoinDrag -> Project.Project -> Maybe UUID -> Project.Chain -> Int -> Project.Node -> Html Msg
 viewActionGroup maybeJoinDrag project openAddMenu column index node =
     div
         [ class "btn-group btn-group-sm"
@@ -1122,7 +1131,7 @@ viewActionGroup maybeJoinDrag project openAddMenu column index node =
         )
 
 
-viewAddDropdown : Maybe JoinDrag -> Maybe UUID -> Project.Column -> Int -> Project.Node -> List (Html Msg)
+viewAddDropdown : Maybe JoinDrag -> Maybe UUID -> Project.Chain -> Int -> Project.Node -> List (Html Msg)
 viewAddDropdown maybeJoinDrag openAddMenu column index node =
     let
         isJoining =
@@ -1192,7 +1201,7 @@ dropdownVerticalStyles opensUp =
         [ style "top" "calc(100% + 4px)" ]
 
 
-viewJoinButton : Maybe JoinDrag -> Project.Column -> Int -> Project.Node -> List (Html Msg)
+viewJoinButton : Maybe JoinDrag -> Project.Chain -> Int -> Project.Node -> List (Html Msg)
 viewJoinButton maybeJoinDrag column index node =
     let
         isJoining =
@@ -1237,7 +1246,7 @@ viewJoinButton maybeJoinDrag column index node =
         ]
 
 
-canStartJoinDrag : Project.Column -> Int -> Bool
+canStartJoinDrag : Project.Chain -> Int -> Bool
 canStartJoinDrag column index =
     (column.forkedFrom /= Nothing)
         && (column.joinedInto == Nothing)
@@ -1264,14 +1273,14 @@ viewDeleteButton maybeJoinDrag project node =
     ]
 
 
-joinTargetStyles : Project.Project -> Maybe JoinDrag -> Project.Column -> Project.Node -> List (Html.Attribute Msg)
+joinTargetStyles : Project.Project -> Maybe JoinDrag -> Project.Chain -> Project.Node -> List (Html.Attribute Msg)
 joinTargetStyles project maybeJoinDrag column node =
     case maybeJoinDrag of
         Just joinDrag ->
             if node.id == joinDrag.sourceNodeId then
                 []
 
-            else if Project.canJoinColumnToNode joinDrag.sourceColumnId node.id project then
+            else if Project.canJoinChainToNode joinDrag.sourceChainId node.id project then
                 if joinDrag.hoveredNodeId == Just node.id then
                     [ style "outline" "2px solid #0d6efd"
                     , style "outline-offset" "3px"
@@ -1290,24 +1299,24 @@ joinTargetStyles project maybeJoinDrag column node =
             []
 
 
-viewEdges : Model -> List Project.Column -> List (Html Msg)
+viewEdges : Model -> List Project.Chain -> List (Html Msg)
 viewEdges model columns =
     viewVerticalEdges model columns
         ++ viewForkEdges model columns
         ++ viewJoinEdges model columns
 
 
-viewDragEdge : Model -> List Project.Column -> Maybe JoinDrag -> List (Html Msg)
+viewDragEdge : Model -> List Project.Chain -> Maybe JoinDrag -> List (Html Msg)
 viewDragEdge model columns maybeJoinDrag =
     case maybeJoinDrag of
         Just joinDrag ->
-            case Project.findColumn joinDrag.sourceColumnId columns of
+            case Project.findChain joinDrag.sourceChainId columns of
                 Just sourceColumn ->
                     case Project.nodeIndex joinDrag.sourceNodeId sourceColumn.nodes of
                         Just sourceIndex ->
                             let
                                 maybeSourceNode =
-                                    Project.findNodeInColumn joinDrag.sourceNodeId sourceColumn
+                                    Project.findNodeInChain joinDrag.sourceNodeId sourceColumn
                             in
                             case maybeSourceNode of
                                 Just sourceNode ->
@@ -1343,7 +1352,7 @@ viewDragEdge model columns maybeJoinDrag =
             []
 
 
-dragTargetPoint : Model -> List Project.Column -> JoinDrag -> Int -> Int -> { x : Int, y : Int }
+dragTargetPoint : Model -> List Project.Chain -> JoinDrag -> Int -> Int -> { x : Int, y : Int }
 dragTargetPoint model columns joinDrag fallbackX fallbackY =
     case joinDrag.graphOrigin of
         Just origin ->
@@ -1355,7 +1364,7 @@ dragTargetPoint model columns joinDrag fallbackX fallbackY =
             { x = fallbackX, y = fallbackY }
 
 
-joinDragSourcePoint : Model -> List Project.Column -> JoinDrag -> Project.Column -> Int -> Project.Node -> { x : Int, y : Int }
+joinDragSourcePoint : Model -> List Project.Chain -> JoinDrag -> Project.Chain -> Int -> Project.Node -> { x : Int, y : Int }
 joinDragSourcePoint model columns joinDrag sourceColumn sourceIndex sourceNode =
     case ( joinDrag.graphOrigin, joinDrag.sourceButtonCenter ) of
         ( Just origin, Just buttonCenter ) ->
@@ -1369,7 +1378,7 @@ joinDragSourcePoint model columns joinDrag sourceColumn sourceIndex sourceNode =
             }
 
 
-viewVerticalEdges : Model -> List Project.Column -> List (Html Msg)
+viewVerticalEdges : Model -> List Project.Chain -> List (Html Msg)
 viewVerticalEdges model columns =
     columns
         |> List.concatMap
@@ -1387,16 +1396,16 @@ viewVerticalEdges model columns =
             )
 
 
-viewForkEdges : Model -> List Project.Column -> List (Html Msg)
+viewForkEdges : Model -> List Project.Chain -> List (Html Msg)
 viewForkEdges model columns =
     columns
         |> List.concatMap
             (\column ->
                 case column.forkedFrom of
                     Just forkRef ->
-                        case Project.findColumn forkRef.sourceColumnId columns of
+                        case Project.findChain forkRef.sourceChainId columns of
                             Just sourceColumn ->
-                                case ( Project.nodeIndex forkRef.sourceNodeId sourceColumn.nodes, Project.findNodeInColumn forkRef.sourceNodeId sourceColumn, column.nodes ) of
+                                case ( Project.nodeIndex forkRef.sourceNodeId sourceColumn.nodes, Project.findNodeInChain forkRef.sourceNodeId sourceColumn, column.nodes ) of
                                     ( Just sourceIndex, Just sourceNode, targetNode :: _ ) ->
                                         let
                                             sourceY =
@@ -1424,21 +1433,21 @@ viewForkEdges model columns =
             )
 
 
-viewJoinEdges : Model -> List Project.Column -> List (Html Msg)
+viewJoinEdges : Model -> List Project.Chain -> List (Html Msg)
 viewJoinEdges model columns =
     columns
         |> List.concatMap
             (\column ->
                 case column.joinedInto of
                     Just joinRef ->
-                        case ( Project.lastNode column, Project.findColumn joinRef.targetColumnId columns ) of
+                        case ( Project.lastNode column, Project.findChain joinRef.targetChainId columns ) of
                             ( Just sourceNode, Just targetColumn ) ->
-                                case ( Project.nodeIndex sourceNode.id column.nodes, Project.nodeIndex joinRef.targetNodeId targetColumn.nodes, Project.findNodeInColumn joinRef.targetNodeId targetColumn ) of
+                                case ( Project.nodeIndex sourceNode.id column.nodes, Project.nodeIndex joinRef.targetNodeId targetColumn.nodes, Project.findNodeInChain joinRef.targetNodeId targetColumn ) of
                                     ( Just sourceIndex, Just targetIndex, Just targetNode ) ->
-                                        viewElbowEdgeLeft
-                                            (columnX column)
+                                        viewInterChainEdge
+                                            column
+                                            targetColumn
                                             (nodeCenter model columns column sourceIndex sourceNode)
-                                            (columnX targetColumn + cardWidth)
                                             (nodeCenter model columns targetColumn targetIndex targetNode)
 
                                     _ ->
@@ -1450,6 +1459,72 @@ viewJoinEdges model columns =
                     Nothing ->
                         []
             )
+
+
+viewInterChainEdge : Project.Chain -> Project.Chain -> Int -> Int -> List (Html Msg)
+viewInterChainEdge sourceChain targetChain sourceY targetY =
+    let
+        sourceColumn =
+            sourceChain.order
+
+        targetColumn =
+            targetChain.order
+    in
+    if sourceColumn < targetColumn then
+        viewElbowEdgeRight
+            (columnX sourceChain + cardWidth)
+            sourceY
+            (columnX targetChain)
+            targetY
+
+    else if sourceColumn > targetColumn then
+        viewElbowEdgeLeft
+            (columnX sourceChain)
+            sourceY
+            (columnX targetChain + cardWidth)
+            targetY
+
+    else
+        viewSameColumnJoinEdge
+            (columnX sourceChain + cardWidth)
+            sourceY
+            (columnX targetChain + cardWidth)
+            targetY
+
+
+viewSameColumnJoinEdge : Int -> Int -> Int -> Int -> List (Html Msg)
+viewSameColumnJoinEdge sourceX sourceY targetX targetY =
+    let
+        routeX =
+            sourceX + (createButtonSideOverhang // 2)
+
+        verticalStart =
+            min sourceY targetY
+
+        verticalEnd =
+            max sourceY targetY
+
+        verticalSegment =
+            if verticalEnd == verticalStart then
+                []
+
+            else
+                [ div
+                    [ edgeBase
+                    , style "left" (px routeX)
+                    , style "bottom" (px verticalStart)
+                    , style "height" (px (verticalEnd - verticalStart))
+                    , style "border-left" ("1px dashed " ++ edgeColor)
+                    ]
+                    []
+                ]
+    in
+    horizontalLine sourceX routeX sourceY
+        :: (verticalSegment
+                ++ [ horizontalLine targetX routeX targetY
+                   , arrowLeft targetX targetY
+                   ]
+           )
 
 
 viewVerticalEdge : Int -> Int -> Int -> List (Html Msg)
@@ -1673,27 +1748,27 @@ edgeBase =
     style "position" "absolute"
 
 
-columnX : Project.Column -> Int
+columnX : Project.Chain -> Int
 columnX column =
     column.order * columnStep
 
 
-nodeRowValue : Project.Column -> Int -> Int
+nodeRowValue : Project.Chain -> Int -> Int
 nodeRowValue column index =
     column.baseRow + index
 
 
-nodeBottom : Model -> List Project.Column -> Project.Column -> Int -> Int
+nodeBottom : Model -> List Project.Chain -> Project.Chain -> Int -> Int
 nodeBottom model columns column index =
     rowBottom model columns (nodeRowValue column index)
 
 
-nodeTop : Model -> List Project.Column -> Project.Column -> Int -> Project.Node -> Int
+nodeTop : Model -> List Project.Chain -> Project.Chain -> Int -> Project.Node -> Int
 nodeTop model columns column index node =
     nodeBottom model columns column index + nodeCardHeight model node
 
 
-nodeCenter : Model -> List Project.Column -> Project.Column -> Int -> Project.Node -> Int
+nodeCenter : Model -> List Project.Chain -> Project.Chain -> Int -> Project.Node -> Int
 nodeCenter model columns column index node =
     nodeBottom model columns column index + (nodeCardHeight model node // 2)
 
@@ -1707,17 +1782,17 @@ nodeCardHeight model node =
         |> Maybe.withDefault nodeHeight
 
 
-nodeGridRow : Int -> Project.Column -> Int -> Int
+nodeGridRow : Int -> Project.Chain -> Int -> Int
 nodeGridRow maxRow column index =
     maxRow - nodeRowValue column index + 1
 
 
-columnTopRow : Project.Column -> Int
+columnTopRow : Project.Chain -> Int
 columnTopRow column =
     column.baseRow + max 0 (List.length column.nodes - 1)
 
 
-maxGraphRow : List Project.Column -> Int
+maxGraphRow : List Project.Chain -> Int
 maxGraphRow columns =
     columns
         |> List.map columnTopRow
@@ -1725,12 +1800,12 @@ maxGraphRow columns =
         |> Maybe.withDefault 0
 
 
-graphRows : List Project.Column -> List Int
+graphRows : List Project.Chain -> List Int
 graphRows columns =
     List.range 0 (maxGraphRow columns)
 
 
-rowHeight : Model -> List Project.Column -> Int -> Int
+rowHeight : Model -> List Project.Chain -> Int -> Int
 rowHeight model columns row =
     columns
         |> List.concatMap
@@ -1750,7 +1825,7 @@ rowHeight model columns row =
         |> Maybe.withDefault nodeHeight
 
 
-rowBottom : Model -> List Project.Column -> Int -> Int
+rowBottom : Model -> List Project.Chain -> Int -> Int
 rowBottom model columns row =
     if row <= 0 then
         0
@@ -1761,7 +1836,7 @@ rowBottom model columns row =
             |> List.sum
 
 
-gridTemplateRows : Model -> List Project.Column -> String
+gridTemplateRows : Model -> List Project.Chain -> String
 gridTemplateRows model columns =
     graphRows columns
         |> List.reverse
@@ -1769,7 +1844,7 @@ gridTemplateRows model columns =
         |> String.join " "
 
 
-columnCount : List Project.Column -> Int
+columnCount : List Project.Chain -> Int
 columnCount columns =
     let
         maxOrder =
@@ -1781,7 +1856,7 @@ columnCount columns =
     maxOrder + 1
 
 
-graphWidth : List Project.Column -> Int
+graphWidth : List Project.Chain -> Int
 graphWidth columns =
     let
         maxOrder =
@@ -1790,7 +1865,7 @@ graphWidth columns =
     (maxOrder * columnStep) + nodeGridWidth + max 24 createButtonSideOverhang
 
 
-graphHeight : Model -> List Project.Column -> Int
+graphHeight : Model -> List Project.Chain -> Int
 graphHeight model columns =
     let
         rows =

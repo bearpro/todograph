@@ -1,6 +1,6 @@
 (function () {
   const dbName = "todo-graph";
-  const dbVersion = 1;
+  const dbVersion = 2;
   const projectStoreName = "projects";
   let dbPromise = null;
 
@@ -27,6 +27,10 @@
 
       request.onupgradeneeded = () => {
         const db = request.result;
+
+        if (db.objectStoreNames.contains(projectStoreName)) {
+          db.deleteObjectStore(projectStoreName);
+        }
 
         if (!db.objectStoreNames.contains(projectStoreName)) {
           db.createObjectStore(projectStoreName, { keyPath: "id" });

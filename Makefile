@@ -1,4 +1,4 @@
-.PHONY: build build-frontend build-backend dev-frontend dev-backend dev-mongo test-backend docker-build docker-up docker-down docker-logs
+.PHONY: build build-frontend build-backend dev-frontend dev-backend dev-mongo test-frontend test-backend docker-build docker-up docker-down docker-logs
 
 build: build-frontend build-backend
 
@@ -16,6 +16,9 @@ dev-backend:
 
 dev-mongo:
 	docker compose up -d mongo
+
+test-frontend:
+	cd src/app-test-runner && elm-test ../app-tests/Page/TodoGraph/LayoutTest.elm
 
 test-backend:
 	cd src/backend && pnpm test
