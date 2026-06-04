@@ -3,7 +3,7 @@ module Main exposing (main)
 import Browser
 import Browser.Navigation as Nav
 import Control.Navbar
-import Control.TodoGraphItem
+import Domain.Project as Project
 import Html
 import Page.AppInit as AppInitPage
 import Page.ProjectSelector as ProjectSelectorPage
@@ -59,14 +59,14 @@ currentRoute page =
             Route.ProjectSelector
 
         TodoGraph model ->
-            Route.Project model.id
+            Route.Project model.project.id
 
 
 currentProjectName : Page -> Maybe String
 currentProjectName page =
     case page of
         TodoGraph model ->
-            model.name
+            model.project.name
 
         _ ->
             Nothing
@@ -103,8 +103,14 @@ view model =
 
 
 subscriptions : Model -> Sub Msg
-subscriptions _ =
-    Sub.none
+subscriptions model =
+    case model.page of
+        TodoGraph page ->
+            TodoGraphPage.subscriptions page
+                |> Sub.map TodoGraphMsg
+
+        _ ->
+            Sub.none
 
 
 changeRouteTo : Maybe Route -> Model -> ( Model, Cmd Msg )
@@ -124,15 +130,9 @@ changeRouteTo maybeRoute model =
             let
                 ( todoGraphModel, cmd ) =
                     TodoGraphPage.init
-                        { id = projectId
-                        , name = Nothing
-                        , graphItems =
-                            [ Control.TodoGraphItem.Text
-                                { text = "Stub"
-                                , status = False
-                                , editState = Control.TodoGraphItem.NotEditing
-                                }
-                            ]
+                        { project = Project.initialProject projectId projectId
+                        , nodeUiStates = []
+                        , joinDrag = Nothing
                         }
             in
             ( { model | page = TodoGraph todoGraphModel }

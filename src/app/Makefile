@@ -1,6 +1,6 @@
 build:
 	mkdir -p ./dist
-	rm ./dist/*
+	rm -f ./dist/*
 	elm make Main.elm --debug --output=dist/main.js
 	cp -f ./static/index.html ./dist/index.html
 
