@@ -2,6 +2,7 @@ module Page.ProjectSelector exposing (Model, Msg(..), init, update, view)
 
 import Browser exposing (Document)
 import Browser.Dom as Dom
+import Domain.Project as DomainProject
 import Html exposing (Attribute, Html, a, button, div, input, li, text, ul)
 import Html.Attributes as Attr exposing (class, disabled, type_, value)
 import Html.Events exposing (on, onClick, onInput)
@@ -48,11 +49,18 @@ type Msg
     | ProjectNameInputFocused (Result Dom.Error ())
 
 
-init : Model
-init =
-    { projects = []
+init : List DomainProject.Project -> Model
+init projects =
+    { projects = List.map projectSummary projects
     , state = ViewingProjects
     , projectNameEdit = Nothing
+    }
+
+
+projectSummary : DomainProject.Project -> Project
+projectSummary project =
+    { id = project.id
+    , name = project.name
     }
 
 

@@ -1,5 +1,7 @@
 module Domain.Project exposing (..)
 
+import Json.Decode as Decode
+import Json.Encode as Encode
 import Time
 import UUID exposing (UUID)
 
@@ -44,8 +46,220 @@ type alias Column =
 type alias Project =
     { id : UUID
     , name : Maybe String
+    , updatedAt : Time.Posix
     , columns : List Column
     }
+
+
+schemaVersion : Int
+schemaVersion =
+    2
+
+
+epoch : Time.Posix
+epoch =
+    Time.millisToPosix 0
+
+
+updatedAtEncoder : Time.Posix -> Encode.Value
+updatedAtEncoder updatedAt =
+    Encode.int (Time.posixToMillis updatedAt)
+
+
+updatedAtDecoder : Decode.Decoder Time.Posix
+updatedAtDecoder =
+    Decode.int
+        |> Decode.map Time.millisToPosix
+
+
+maxPosix : Time.Posix -> Time.Posix -> Time.Posix
+maxPosix left right =
+    Time.millisToPosix
+        (max (Time.posixToMillis left) (Time.posixToMillis right))
+
+
+touch : Time.Posix -> Project -> Project
+touch updatedAt project =
+    { project | updatedAt = maxPosix project.updatedAt updatedAt }
+
+
+uuidEncoder : UUID -> Encode.Value
+uuidEncoder uuid =
+    Encode.string (UUID.toString uuid)
+
+
+uuidDecoder : Decode.Decoder UUID
+uuidDecoder =
+    Decode.string
+        |> Decode.andThen
+            (\value ->
+                case UUID.fromString value of
+                    Ok uuid ->
+                        Decode.succeed uuid
+
+                    Err _ ->
+                        Decode.fail ("Invalid UUID: " ++ value)
+            )
+
+
+maybeEncoder : (value -> Encode.Value) -> Maybe value -> Encode.Value
+maybeEncoder encoder maybeValue =
+    case maybeValue of
+        Just value ->
+            encoder value
+
+        Nothing ->
+            Encode.null
+
+
+timerEncoder : Timer -> Encode.Value
+timerEncoder timer =
+    case timer of
+        Started startedAt ->
+            Encode.object
+                [ ( "state", Encode.string "started" )
+                , ( "startedAt", Encode.int (Time.posixToMillis startedAt) )
+                ]
+
+        Stopped seconds ->
+            Encode.object
+                [ ( "state", Encode.string "stopped" )
+                , ( "seconds", Encode.int seconds )
+                ]
+
+
+timerDecoder : Decode.Decoder Timer
+timerDecoder =
+    Decode.field "state" Decode.string
+        |> Decode.andThen
+            (\state ->
+                case state of
+                    "started" ->
+                        Decode.field "startedAt" Decode.int
+                            |> Decode.map (Time.millisToPosix >> Started)
+
+                    "stopped" ->
+                        Decode.field "seconds" Decode.int
+                            |> Decode.map Stopped
+
+                    _ ->
+                        Decode.fail ("Invalid timer state: " ++ state)
+            )
+
+
+nodeEncoder : Node -> Encode.Value
+nodeEncoder node =
+    Encode.object
+        [ ( "id", uuidEncoder node.id )
+        , ( "text", Encode.string node.text )
+        , ( "status", Encode.bool node.status )
+        , ( "timer", maybeEncoder timerEncoder node.timer )
+        , ( "description", maybeEncoder Encode.string node.description )
+        ]
+
+
+nodeDecoder : Decode.Decoder Node
+nodeDecoder =
+    Decode.map5 Node
+        (Decode.field "id" uuidDecoder)
+        (Decode.field "text" Decode.string)
+        (Decode.field "status" Decode.bool)
+        (Decode.field "timer" (Decode.nullable timerDecoder))
+        (Decode.field "description" (Decode.nullable Decode.string))
+
+
+forkRefEncoder : ForkRef -> Encode.Value
+forkRefEncoder ref =
+    Encode.object
+        [ ( "sourceColumnId", uuidEncoder ref.sourceColumnId )
+        , ( "sourceNodeId", uuidEncoder ref.sourceNodeId )
+        ]
+
+
+forkRefDecoder : Decode.Decoder ForkRef
+forkRefDecoder =
+    Decode.map2 ForkRef
+        (Decode.field "sourceColumnId" uuidDecoder)
+        (Decode.field "sourceNodeId" uuidDecoder)
+
+
+joinRefEncoder : JoinRef -> Encode.Value
+joinRefEncoder ref =
+    Encode.object
+        [ ( "targetColumnId", uuidEncoder ref.targetColumnId )
+        , ( "targetNodeId", uuidEncoder ref.targetNodeId )
+        ]
+
+
+joinRefDecoder : Decode.Decoder JoinRef
+joinRefDecoder =
+    Decode.map2 JoinRef
+        (Decode.field "targetColumnId" uuidDecoder)
+        (Decode.field "targetNodeId" uuidDecoder)
+
+
+columnEncoder : Column -> Encode.Value
+columnEncoder column =
+    Encode.object
+        [ ( "id", uuidEncoder column.id )
+        , ( "order", Encode.int column.order )
+        , ( "baseRow", Encode.int column.baseRow )
+        , ( "name", maybeEncoder Encode.string column.name )
+        , ( "nodes", Encode.list nodeEncoder column.nodes )
+        , ( "forkedFrom", maybeEncoder forkRefEncoder column.forkedFrom )
+        , ( "joinedInto", maybeEncoder joinRefEncoder column.joinedInto )
+        ]
+
+
+columnDecoder : Decode.Decoder Column
+columnDecoder =
+    Decode.map7 Column
+        (Decode.field "id" uuidDecoder)
+        (Decode.field "order" Decode.int)
+        (Decode.field "baseRow" Decode.int)
+        (Decode.field "name" (Decode.nullable Decode.string))
+        (Decode.field "nodes" (Decode.list nodeDecoder))
+        (Decode.field "forkedFrom" (Decode.nullable forkRefDecoder))
+        (Decode.field "joinedInto" (Decode.nullable joinRefDecoder))
+
+
+projectEncoder : Project -> Encode.Value
+projectEncoder project =
+    Encode.object
+        [ ( "schemaVersion", Encode.int schemaVersion )
+        , ( "id", uuidEncoder project.id )
+        , ( "name", maybeEncoder Encode.string project.name )
+        , ( "updatedAt", updatedAtEncoder project.updatedAt )
+        , ( "columns", Encode.list columnEncoder project.columns )
+        ]
+
+
+projectDecoder : Decode.Decoder Project
+projectDecoder =
+    Decode.field "schemaVersion" Decode.int
+        |> Decode.andThen
+            (\version ->
+                if version == schemaVersion then
+                    Decode.map4 Project
+                        (Decode.field "id" uuidDecoder)
+                        (Decode.field "name" (Decode.nullable Decode.string))
+                        (Decode.field "updatedAt" updatedAtDecoder)
+                        (Decode.field "columns" (Decode.list columnDecoder))
+
+                else
+                    Decode.fail ("Unsupported project schema version: " ++ String.fromInt version)
+            )
+
+
+projectsDecoder : Decode.Decoder (List Project)
+projectsDecoder =
+    Decode.list
+        (Decode.oneOf
+            [ Decode.map Just projectDecoder
+            , Decode.succeed Nothing
+            ]
+        )
+        |> Decode.map (List.filterMap identity)
 
 
 textNode : UUID -> String -> Node
@@ -72,6 +286,7 @@ initialProject : UUID -> UUID -> Project
 initialProject projectId firstNodeId =
     { id = projectId
     , name = Nothing
+    , updatedAt = epoch
     , columns =
         [ { id = projectId
           , order = 0

@@ -1,8 +1,8 @@
 build:
 	mkdir -p ./dist
-	rm -f ./dist/*
+	rm -rf ./dist/*
 	elm make Main.elm --debug --output=dist/main.js
-	cp -f ./static/index.html ./dist/index.html
+	cp -R ./static/. ./dist/
 
 run-dev: build
-	elm-live -d dist -s index.html Main.elm -- --output dist/main.js
+	elm-live -d dist -s index.html --pushstate true Main.elm -- --output dist/main.js
