@@ -208,7 +208,7 @@ viewMobileSidebar model =
 
 viewShell : Model -> Browser.Document Msg -> Browser.Document Msg
 viewShell model workspace =
-    { title = "TodoGraph | " ++ workspace.title
+    { title = "ToDo Graph | " ++ workspace.title
     , body =
         [ Control.Navbar.view
             { currentPage = currentRoute model.page

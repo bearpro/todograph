@@ -1,6 +1,6 @@
 {
   "name": "ToDo Graph",
-  "short_name": "Todo Graph",
+  "short_name": "ToDo Graph",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
