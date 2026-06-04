@@ -5,8 +5,8 @@ import Browser.Dom as Dom
 import Browser.Events as BrowserEvents
 import Control.TodoGraphItem as TodoGraphItem
 import Domain.Project as Project
-import Html exposing (Html, button, div, text)
-import Html.Attributes exposing (attribute, class, id, style, title)
+import Html exposing (Html, button, div, span, text)
+import Html.Attributes exposing (attribute, class, disabled, id, style, title, type_)
 import Html.Events exposing (on, onClick, onMouseEnter, onMouseLeave)
 import Json.Decode as Decode
 import Platform.Cmd as Cmd
@@ -21,6 +21,9 @@ type alias Model =
     , nodeUiStates : List NodeUiState
     , joinDrag : Maybe JoinDrag
     , now : Maybe Time.Posix
+    , openNewMenu : Maybe UUID
+    , openAddMenu : Maybe UUID
+    , nodeHeights : List NodeHeight
     }
 
 
@@ -30,11 +33,18 @@ type alias NodeUiState =
     }
 
 
+type alias NodeHeight =
+    { nodeId : UUID
+    , height : Int
+    }
+
+
 type alias JoinDrag =
     { sourceColumnId : UUID
     , sourceNodeId : UUID
     , mouse : MousePoint
     , graphOrigin : Maybe MousePoint
+    , sourceButtonCenter : Maybe MousePoint
     , hoveredNodeId : Maybe UUID
     }
 
@@ -47,14 +57,19 @@ type alias MousePoint =
 
 type Msg
     = GraphItemMsg UUID TodoGraphItem.Msg
-    | CreateTextNode UUID
-    | CreateTimerNode UUID
-    | TextNodeGenerated UUID UUID
-    | TimerNodeGenerated UUID UUID
+    | ToggleNewMenu UUID
+    | ToggleAddMenu UUID
+    | CreateTextNodeAfter UUID
+    | TextNodeAfterGenerated UUID UUID
+    | AddTimer UUID
+    | AddDescription UUID
     | CreateFork UUID UUID
     | ForkGenerated UUID UUID UUID UUID
     | StartJoinDrag UUID UUID MousePoint
+    | Unjoin UUID
     | GraphElementMeasured (Result Dom.Error Dom.Element)
+    | JoinButtonMeasured (Result Dom.Error Dom.Element)
+    | NodeCardMeasured UUID (Result Dom.Error Dom.Element)
     | MoveJoinDrag MousePoint
     | FinishJoinDrag MousePoint
     | HoverJoinTarget UUID
@@ -70,12 +85,12 @@ cardWidth =
 
 nodeHeight : Int
 nodeHeight =
-    58
+    132
 
 
 rowStep : Int
 rowStep =
-    92
+    164
 
 
 columnStep : Int
@@ -83,19 +98,9 @@ columnStep =
     380
 
 
-forkButtonSize : Int
-forkButtonSize =
-    46
-
-
-forkButtonGap : Int
-forkButtonGap =
-    10
-
-
 nodeGridWidth : Int
 nodeGridWidth =
-    cardWidth + forkButtonGap + (forkButtonSize * 2) + 8
+    cardWidth
 
 
 columnGap : Int
@@ -106,21 +111,6 @@ columnGap =
 rowGap : Int
 rowGap =
     rowStep - nodeHeight
-
-
-deleteButtonSize : Int
-deleteButtonSize =
-    26
-
-
-toolbarHeight : Int
-toolbarHeight =
-    32
-
-
-toolbarGap : Int
-toolbarGap =
-    12
 
 
 edgeColor : String
@@ -135,7 +125,7 @@ graphRootId =
 
 init : Model -> ( Model, Cmd Msg )
 init model =
-    ( model, Cmd.none )
+    ( model, measureProjectNodes model.project )
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -144,32 +134,83 @@ update msg model =
         GraphItemMsg nodeId graphItemMsg ->
             updateGraphItem nodeId graphItemMsg model
 
-        CreateTextNode columnId ->
-            ( model
-            , Random.generate (TextNodeGenerated columnId) UUID.generator
-            )
-
-        CreateTimerNode columnId ->
-            ( model
-            , Random.generate (TimerNodeGenerated columnId) UUID.generator
-            )
-
-        TextNodeGenerated columnId nodeId ->
+        ToggleNewMenu nodeId ->
             ( { model
-                | project =
-                    model.project
-                        |> Project.appendNode columnId (Project.textNode nodeId "item")
+                | openNewMenu =
+                    if model.openNewMenu == Just nodeId then
+                        Nothing
+
+                    else
+                        Just nodeId
+                , openAddMenu = Nothing
               }
             , Cmd.none
             )
 
-        TimerNodeGenerated columnId nodeId ->
+        ToggleAddMenu nodeId ->
             ( { model
-                | project =
-                    model.project
-                        |> Project.appendNode columnId (Project.timerNode nodeId "timer")
+                | openAddMenu =
+                    if model.openAddMenu == Just nodeId then
+                        Nothing
+
+                    else
+                        Just nodeId
+                , openNewMenu = Nothing
               }
             , Cmd.none
+            )
+
+        CreateTextNodeAfter nodeId ->
+            ( model
+            , Random.generate (TextNodeAfterGenerated nodeId) UUID.generator
+            )
+
+        TextNodeAfterGenerated afterNodeId nodeId ->
+            let
+                nextProject =
+                    model.project
+                        |> Project.insertNodeAfter afterNodeId (Project.textNode nodeId "item")
+            in
+            ( { model
+                | project = nextProject
+                , openNewMenu = Nothing
+                , openAddMenu = Nothing
+              }
+            , measureProjectNodes nextProject
+            )
+
+        AddTimer nodeId ->
+            let
+                nextProject =
+                    model.project
+                        |> Project.addTimerToNode nodeId
+            in
+            ( { model
+                | project = nextProject
+                , openAddMenu = Nothing
+                , openNewMenu = Nothing
+              }
+            , measureProjectNodes nextProject
+            )
+
+        AddDescription nodeId ->
+            let
+                nextProject =
+                    model.project
+                        |> Project.addDescriptionToNode nodeId
+            in
+            ( { model
+                | project = nextProject
+                , nodeUiStates =
+                    upsertNodeEditState nodeId (TodoGraphItem.EditingDescription "") model.nodeUiStates
+                , openAddMenu = Nothing
+                , openNewMenu = Nothing
+              }
+            , Cmd.batch
+                [ measureProjectNodes nextProject
+                , Dom.focus (TodoGraphItem.descriptionInputId nodeId)
+                    |> Task.attempt (GraphItemMsg nodeId << TodoGraphItem.TextInputFocused)
+                ]
             )
 
         CreateFork sourceColumnId sourceNodeId ->
@@ -182,16 +223,21 @@ update msg model =
             )
 
         ForkGenerated sourceColumnId sourceNodeId columnId nodeId ->
-            ( { model
-                | project =
+            let
+                nextProject =
                     model.project
                         |> Project.forkColumn
                             sourceColumnId
                             sourceNodeId
                             columnId
                             (Project.textNode nodeId "item")
+            in
+            ( { model
+                | project = nextProject
+                , openNewMenu = Nothing
+                , openAddMenu = Nothing
               }
-            , Cmd.none
+            , measureProjectNodes nextProject
             )
 
         StartJoinDrag sourceColumnId sourceNodeId mouse ->
@@ -202,11 +248,31 @@ update msg model =
                         , sourceNodeId = sourceNodeId
                         , mouse = mouse
                         , graphOrigin = Nothing
+                        , sourceButtonCenter = Nothing
                         , hoveredNodeId = Nothing
                         }
+                , openNewMenu = Nothing
+                , openAddMenu = Nothing
               }
-            , Dom.getElement graphRootId
-                |> Task.attempt GraphElementMeasured
+            , Cmd.batch
+                [ Dom.getElement graphRootId
+                    |> Task.attempt GraphElementMeasured
+                , Dom.getElement (joinButtonId sourceNodeId)
+                    |> Task.attempt JoinButtonMeasured
+                ]
+            )
+
+        Unjoin columnId ->
+            let
+                nextProject =
+                    Project.unjoinColumn columnId model.project
+            in
+            ( { model
+                | project = nextProject
+                , openNewMenu = Nothing
+                , openAddMenu = Nothing
+              }
+            , measureProjectNodes nextProject
             )
 
         GraphElementMeasured result ->
@@ -227,6 +293,43 @@ update msg model =
                     )
 
                 _ ->
+                    ( model, Cmd.none )
+
+        JoinButtonMeasured result ->
+            case ( result, model.joinDrag ) of
+                ( Ok element, Just joinDrag ) ->
+                    ( { model
+                        | joinDrag =
+                            Just
+                                { joinDrag
+                                    | sourceButtonCenter =
+                                        Just
+                                            { x = element.element.x + (element.element.width / 2)
+                                            , y = element.element.y + (element.element.height / 2)
+                                            }
+                                }
+                      }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        NodeCardMeasured nodeId result ->
+            case result of
+                Ok element ->
+                    ( { model
+                        | nodeHeights =
+                            upsertNodeHeight
+                                { nodeId = nodeId
+                                , height = max 1 (ceiling element.element.height)
+                                }
+                                model.nodeHeights
+                      }
+                    , Cmd.none
+                    )
+
+                Err _ ->
                     ( model, Cmd.none )
 
         MoveJoinDrag mouse ->
@@ -250,8 +353,8 @@ update msg model =
                                     )
                                 |> Maybe.withDefault model.project
                     in
-                    ( { model | project = nextProject, joinDrag = Nothing }
-                    , Cmd.none
+                    ( { model | project = nextProject, joinDrag = Nothing, openNewMenu = Nothing, openAddMenu = Nothing }
+                    , measureProjectNodes nextProject
                     )
 
                 Nothing ->
@@ -290,13 +393,32 @@ update msg model =
             )
 
         DeleteNode nodeId ->
+            let
+                nextProject =
+                    Project.deleteNode nodeId model.project
+            in
             ( { model
-                | project = Project.deleteNode nodeId model.project
+                | project = nextProject
                 , nodeUiStates =
                     model.nodeUiStates
                         |> List.filter (.nodeId >> (/=) nodeId)
+                , nodeHeights =
+                    model.nodeHeights
+                        |> List.filter (.nodeId >> (/=) nodeId)
+                , openNewMenu =
+                    if model.openNewMenu == Just nodeId then
+                        Nothing
+
+                    else
+                        model.openNewMenu
+                , openAddMenu =
+                    if model.openAddMenu == Just nodeId then
+                        Nothing
+
+                    else
+                        model.openAddMenu
               }
-            , Cmd.none
+            , measureProjectNodes nextProject
             )
 
         Tick now ->
@@ -361,16 +483,21 @@ updateGraphItem nodeId graphItemMsg model =
 
                         _ ->
                             model.now
-            in
-            ( { model
-                | project =
+
+                nextProject =
                     model.project
                         |> Project.updateNode nodeId updatedControlModel.node
+            in
+            ( { model
+                | project = nextProject
                 , nodeUiStates =
                     upsertNodeUiState updatedControlModel model.nodeUiStates
                 , now = nextNow
               }
-            , Cmd.map (GraphItemMsg nodeId) command
+            , Cmd.batch
+                [ Cmd.map (GraphItemMsg nodeId) command
+                , measureProjectNodes nextProject
+                ]
             )
 
         Nothing ->
@@ -419,6 +546,75 @@ upsertNodeUiState controlModel nodeUiStates =
         nextUiState :: nodeUiStates
 
 
+upsertNodeEditState : UUID -> TodoGraphItem.TextEditState -> List NodeUiState -> List NodeUiState
+upsertNodeEditState nodeId editState nodeUiStates =
+    let
+        nextUiState =
+            { nodeId = nodeId
+            , textEditState = editState
+            }
+
+        replaceExisting uiState =
+            if uiState.nodeId == nodeId then
+                nextUiState
+
+            else
+                uiState
+
+        exists =
+            nodeUiStates
+                |> List.any (.nodeId >> (==) nodeId)
+    in
+    if exists then
+        nodeUiStates |> List.map replaceExisting
+
+    else
+        nextUiState :: nodeUiStates
+
+
+measureProjectNodes : Project.Project -> Cmd Msg
+measureProjectNodes project =
+    project.columns
+        |> List.concatMap .nodes
+        |> List.map
+            (\node ->
+                Dom.getElement (nodeCardId node.id)
+                    |> Task.attempt (NodeCardMeasured node.id)
+            )
+        |> Cmd.batch
+
+
+nodeCardId : UUID -> String
+nodeCardId nodeId =
+    "todo-graph-node-card-" ++ UUID.toString nodeId
+
+
+joinButtonId : UUID -> String
+joinButtonId nodeId =
+    "todo-graph-node-join-" ++ UUID.toString nodeId
+
+
+upsertNodeHeight : NodeHeight -> List NodeHeight -> List NodeHeight
+upsertNodeHeight nextHeight nodeHeights =
+    let
+        replaceExisting cachedHeight =
+            if cachedHeight.nodeId == nextHeight.nodeId then
+                nextHeight
+
+            else
+                cachedHeight
+
+        exists =
+            nodeHeights
+                |> List.any (.nodeId >> (==) nextHeight.nodeId)
+    in
+    if exists then
+        nodeHeights |> List.map replaceExisting
+
+    else
+        nextHeight :: nodeHeights
+
+
 findNode : UUID -> Project.Project -> Maybe Project.Node
 findNode nodeId project =
     project.columns
@@ -461,50 +657,17 @@ view model =
                 , style "align-content" "end"
                 , style "justify-content" "start"
                 , style "width" (px (graphWidth sortedColumns))
-                , style "height" (px (graphHeight sortedColumns))
+                , style "height" (px (graphHeight model sortedColumns))
                 , style "min-width" (px (graphWidth sortedColumns))
-                , style "min-height" (px (graphHeight sortedColumns))
+                , style "min-height" (px (graphHeight model sortedColumns))
                 ]
-                (viewEdges sortedColumns
-                    ++ viewDragEdge sortedColumns model.joinDrag
-                    ++ viewToolbars hideButtons maxRow sortedColumns
+                (viewEdges model sortedColumns
+                    ++ viewDragEdge model sortedColumns model.joinDrag
                     ++ viewNodes hideButtons maxRow model sortedColumns
                 )
             ]
         ]
     }
-
-
-viewToolbars : Bool -> Int -> List Project.Column -> List (Html Msg)
-viewToolbars hideButtons maxRow columns =
-    if hideButtons then
-        []
-
-    else
-        columns
-            |> List.map (viewColumnToolbar maxRow)
-
-
-viewColumnToolbar : Int -> Project.Column -> Html Msg
-viewColumnToolbar maxRow column =
-    div
-        [ class "d-flex align-items-center gap-2"
-        , style "grid-column" (String.fromInt (column.order + 1))
-        , style "grid-row" (String.fromInt (toolbarGridRow maxRow column))
-        , style "width" (px cardWidth)
-        , style "height" (px toolbarHeight)
-        , style "align-self" "start"
-        , style "justify-self" "start"
-        , style "transform" ("translateY(-" ++ px (toolbarHeight + toolbarGap) ++ ")")
-        , style "z-index" "2"
-        ]
-        [ button
-            [ onClick (CreateTextNode column.id), class "btn btn-sm btn-outline-dark" ]
-            [ text "New item" ]
-        , button
-            [ onClick (CreateTimerNode column.id), class "btn btn-sm btn-outline-dark" ]
-            [ text "New timer" ]
-        ]
 
 
 viewNodes : Bool -> Int -> Model -> List Project.Column -> List (Html Msg)
@@ -520,13 +683,13 @@ viewNodes hideButtons maxRow model columns =
 viewNode : Bool -> Int -> Model -> Project.Column -> Int -> Project.Node -> Html Msg
 viewNode hideButtons maxRow model column index node =
     let
-        itemHtml =
-            TodoGraphItem.view
+        itemContent =
+            TodoGraphItem.viewContent
                 { hideButtons = hideButtons
                 , now = model.now
                 }
                 (controlModelFor node model)
-                |> Html.map (GraphItemMsg node.id)
+                |> List.map (Html.map (GraphItemMsg node.id))
     in
     div
         [ style "position" "relative"
@@ -536,67 +699,247 @@ viewNode hideButtons maxRow model column index node =
         , style "height" (px nodeHeight)
         , style "align-self" "stretch"
         , style "justify-self" "start"
-        , style "z-index" "3"
+        , style "z-index"
+            (if model.openNewMenu == Just node.id || model.openAddMenu == Just node.id then
+                "8"
+
+             else
+                "3"
+            )
         , onMouseEnter (HoverJoinTarget node.id)
         , onMouseLeave (LeaveJoinTarget node.id)
         ]
-        ([ div
-            ([ style "position" "absolute"
+        [ div
+            ([ class "card d-flex flex-column"
+             , id (nodeCardId node.id)
+             , style "position" "absolute"
              , style "left" "0"
-             , style "top" "0"
+             , style "bottom" "0"
              , style "width" (px cardWidth)
-             , style "height" (px nodeHeight)
+             , style "box-sizing" "border-box"
              ]
                 ++ joinTargetStyles model.project model.joinDrag column node
             )
-            [ itemHtml ]
-         ]
-            ++ viewDeleteNodeButton hideButtons model.project node
-            ++ viewJoinHandle hideButtons column index node
-            ++ viewForkButton hideButtons column node
+            (itemContent
+                ++ viewCardFooter model.joinDrag model.project model.openNewMenu model.openAddMenu column index node
+            )
+        ]
+
+
+viewCardFooter : Maybe JoinDrag -> Project.Project -> Maybe UUID -> Maybe UUID -> Project.Column -> Int -> Project.Node -> List (Html Msg)
+viewCardFooter maybeJoinDrag project openNewMenu openAddMenu column index node =
+    [ div
+        [ class "card-footer p-2" ]
+        [ viewActionGroup maybeJoinDrag project openNewMenu openAddMenu column index node ]
+    ]
+
+
+hiddenStyles : Bool -> List (Html.Attribute Msg)
+hiddenStyles hidden =
+    if hidden then
+        [ style "visibility" "hidden"
+        , style "pointer-events" "none"
+        ]
+
+    else
+        []
+
+
+viewActionGroup : Maybe JoinDrag -> Project.Project -> Maybe UUID -> Maybe UUID -> Project.Column -> Int -> Project.Node -> Html Msg
+viewActionGroup maybeJoinDrag project openNewMenu openAddMenu column index node =
+    div
+        [ class "btn-group btn-group-sm"
+        , attribute "role" "group"
+        , style "position" "relative"
+        ]
+        (viewNewDropdown maybeJoinDrag project openNewMenu column index node
+            ++ viewAddDropdown maybeJoinDrag openAddMenu column index node
+            ++ viewJoinButton maybeJoinDrag column index node
+            ++ viewDeleteButton maybeJoinDrag project node
         )
 
 
-viewForkButton : Bool -> Project.Column -> Project.Node -> List (Html Msg)
-viewForkButton hideButtons column node =
-    if hideButtons then
-        []
+viewNewDropdown : Maybe JoinDrag -> Project.Project -> Maybe UUID -> Project.Column -> Int -> Project.Node -> List (Html Msg)
+viewNewDropdown maybeJoinDrag project openNewMenu column index node =
+    let
+        canCreate =
+            Project.canCreateAfterNode node.id project
+
+        isJoining =
+            maybeJoinDrag /= Nothing
+
+        isOpen =
+            openNewMenu == Just node.id
+
+        opensUp =
+            nodeRowValue column index == 0
+    in
+    button
+        ([ type_ "button"
+         , class "btn btn-outline-primary dropdown-toggle"
+         , onClick (ToggleNewMenu node.id)
+         , disabled (isJoining || not canCreate)
+         ]
+            ++ hiddenStyles isJoining
+        )
+        [ text "New" ]
+        :: (if not isJoining && canCreate && isOpen then
+                [ div
+                    ([ class "dropdown-menu show"
+                     , style "display" "block"
+                     , style "position" "absolute"
+                     , style "left" "0"
+                     , style "z-index" "20"
+                     ]
+                        ++ dropdownVerticalStyles opensUp
+                    )
+                    [ button
+                        [ type_ "button"
+                        , class "dropdown-item"
+                        , onClick (CreateTextNodeAfter node.id)
+                        ]
+                        [ text "New item" ]
+                    , button
+                        [ type_ "button"
+                        , class "dropdown-item"
+                        , onClick (CreateFork column.id node.id)
+                        ]
+                        [ text "New column" ]
+                    ]
+                ]
+
+            else
+                []
+           )
+
+
+viewAddDropdown : Maybe JoinDrag -> Maybe UUID -> Project.Column -> Int -> Project.Node -> List (Html Msg)
+viewAddDropdown maybeJoinDrag openAddMenu column index node =
+    let
+        isJoining =
+            maybeJoinDrag /= Nothing
+
+        isOpen =
+            openAddMenu == Just node.id
+
+        opensUp =
+            nodeRowValue column index == 0
+
+        hasTimer =
+            node.timer /= Nothing
+
+        hasDescription =
+            node.description /= Nothing
+    in
+    button
+        ([ type_ "button"
+         , class "btn btn-outline-primary dropdown-toggle"
+         , onClick (ToggleAddMenu node.id)
+         , disabled isJoining
+         ]
+            ++ hiddenStyles isJoining
+        )
+        [ text "Add" ]
+        :: (if not isJoining && isOpen then
+                [ div
+                    ([ class "dropdown-menu show"
+                     , style "display" "block"
+                     , style "position" "absolute"
+                     , style "left" "0"
+                     , style "z-index" "20"
+                     ]
+                        ++ dropdownVerticalStyles opensUp
+                    )
+                    [ button
+                        [ type_ "button"
+                        , class "dropdown-item"
+                        , onClick (AddTimer node.id)
+                        , disabled hasTimer
+                        ]
+                        [ text "Timer" ]
+                    , button
+                        [ type_ "button"
+                        , class "dropdown-item"
+                        , onClick (AddDescription node.id)
+                        , disabled hasDescription
+                        ]
+                        [ text "Description" ]
+                    ]
+                ]
+
+            else
+                []
+           )
+
+
+dropdownVerticalStyles : Bool -> List (Html.Attribute Msg)
+dropdownVerticalStyles opensUp =
+    if opensUp then
+        [ style "bottom" "calc(100% + 4px)" ]
+
+    else
+        [ style "top" "calc(100% + 4px)" ]
+
+
+viewJoinButton : Maybe JoinDrag -> Project.Column -> Int -> Project.Node -> List (Html Msg)
+viewJoinButton maybeJoinDrag column index node =
+    let
+        isJoining =
+            maybeJoinDrag /= Nothing
+
+        isSource =
+            maybeJoinDrag
+                |> Maybe.map (\joinDrag -> joinDrag.sourceNodeId == node.id)
+                |> Maybe.withDefault False
+
+        isJoinSource =
+            Project.isJoinSource node.id column
+    in
+    if isJoinSource then
+        [ button
+            ([ type_ "button"
+             , id (joinButtonId node.id)
+             , class "btn btn-outline-primary"
+             , title "Unjoin"
+             , attribute "aria-label" "Unjoin"
+             , onClick (Unjoin column.id)
+             , disabled isJoining
+             ]
+                ++ hiddenStyles isJoining
+            )
+            [ text "Unjoin" ]
+        ]
 
     else
         [ button
-            [ onClick (CreateFork column.id node.id)
-            , class "btn btn-sm btn-outline-dark rounded-circle"
-            , style "position" "absolute"
-            , style "left" (px (cardWidth + forkButtonGap))
-            , style "top" (px ((nodeHeight - forkButtonSize) // 2))
-            , style "width" (px forkButtonSize)
-            , style "height" (px forkButtonSize)
-            , style "z-index" "3"
+            ([ on "mousedown" (Decode.map (StartJoinDrag column.id node.id) mousePointDecoder)
+             , type_ "button"
+             , id (joinButtonId node.id)
+             , class "btn btn-outline-primary"
+             , title "Join"
+             , attribute "aria-label" "Join"
+             , disabled (isJoining || not (canStartJoinDrag column index))
+             ]
+                ++ hiddenStyles (isJoining && not isSource)
+            )
+            [ joinIcon
+            , text "Join"
             ]
-            [ text "fork" ]
         ]
 
 
-viewJoinHandle : Bool -> Project.Column -> Int -> Project.Node -> List (Html Msg)
-viewJoinHandle hideButtons column index node =
-    if hideButtons || not (canStartJoinDrag column index) then
+joinIcon : Html Msg
+joinIcon =
+    span
+        [ style "display" "inline-block"
+        , style "width" "0.55rem"
+        , style "height" "0.55rem"
+        , style "border" "1px solid currentColor"
+        , style "border-radius" "50%"
+        , style "margin-right" "0.35rem"
+        , style "vertical-align" "-0.05rem"
+        ]
         []
-
-    else
-        [ button
-            [ on "mousedown" (Decode.map (StartJoinDrag column.id node.id) mousePointDecoder)
-            , class "btn btn-sm btn-outline-primary rounded-circle"
-            , title "Join"
-            , attribute "aria-label" "Join"
-            , style "position" "absolute"
-            , style "left" (px (cardWidth + forkButtonGap + forkButtonSize + 8))
-            , style "top" (px ((nodeHeight - forkButtonSize) // 2))
-            , style "width" (px forkButtonSize)
-            , style "height" (px forkButtonSize)
-            , style "z-index" "3"
-            ]
-            [ text "join" ]
-        ]
 
 
 canStartJoinDrag : Project.Column -> Int -> Bool
@@ -606,31 +949,24 @@ canStartJoinDrag column index =
         && (index == List.length column.nodes - 1)
 
 
-viewDeleteNodeButton : Bool -> Project.Project -> Project.Node -> List (Html Msg)
-viewDeleteNodeButton hideButtons project node =
-    if hideButtons then
-        []
-
-    else if Project.canDeleteNode node.id project then
-        [ button
-            [ onClick (DeleteNode node.id)
-            , class "btn btn-sm btn-outline-danger rounded-circle"
-            , title "Delete node"
-            , attribute "aria-label" "Delete node"
-            , style "position" "absolute"
-            , style "right" (px (nodeGridWidth - cardWidth + 6))
-            , style "top" "6px"
-            , style "width" (px deleteButtonSize)
-            , style "height" (px deleteButtonSize)
-            , style "line-height" "1"
-            , style "padding" "0"
-            , style "z-index" "4"
-            ]
-            [ text "x" ]
-        ]
-
-    else
-        []
+viewDeleteButton : Maybe JoinDrag -> Project.Project -> Project.Node -> List (Html Msg)
+viewDeleteButton maybeJoinDrag project node =
+    let
+        isJoining =
+            maybeJoinDrag /= Nothing
+    in
+    [ button
+        ([ type_ "button"
+         , onClick (DeleteNode node.id)
+         , class "btn btn-outline-danger"
+         , title "Delete node"
+         , attribute "aria-label" "Delete node"
+         , disabled (isJoining || not (Project.canDeleteNode node.id project))
+         ]
+            ++ hiddenStyles isJoining
+        )
+        [ text "Delete" ]
+    ]
 
 
 joinTargetStyles : Project.Project -> Maybe JoinDrag -> Project.Column -> Project.Node -> List (Html.Attribute Msg)
@@ -659,42 +995,48 @@ joinTargetStyles project maybeJoinDrag column node =
             []
 
 
-viewEdges : List Project.Column -> List (Html Msg)
-viewEdges columns =
-    viewVerticalEdges columns
-        ++ viewForkEdges columns
-        ++ viewJoinEdges columns
+viewEdges : Model -> List Project.Column -> List (Html Msg)
+viewEdges model columns =
+    viewVerticalEdges model columns
+        ++ viewForkEdges model columns
+        ++ viewJoinEdges model columns
 
 
-viewDragEdge : List Project.Column -> Maybe JoinDrag -> List (Html Msg)
-viewDragEdge columns maybeJoinDrag =
+viewDragEdge : Model -> List Project.Column -> Maybe JoinDrag -> List (Html Msg)
+viewDragEdge model columns maybeJoinDrag =
     case maybeJoinDrag of
         Just joinDrag ->
             case Project.findColumn joinDrag.sourceColumnId columns of
                 Just sourceColumn ->
-                    case Project.nodeRow sourceColumn joinDrag.sourceNodeId of
-                        Just sourceRow ->
+                    case Project.nodeIndex joinDrag.sourceNodeId sourceColumn.nodes of
+                        Just sourceIndex ->
                             let
-                                sourceX =
-                                    columnX sourceColumn + cardWidth
-
-                                sourceY =
-                                    rowCenter sourceRow
-
-                                targetPoint =
-                                    dragTargetPoint columns joinDrag sourceX sourceY
+                                maybeSourceNode =
+                                    Project.findNodeInColumn joinDrag.sourceNodeId sourceColumn
                             in
-                            [ div
-                                [ style "position" "absolute"
-                                , style "left" "0"
-                                , style "bottom" "0"
-                                , style "width" (px (graphWidth columns))
-                                , style "height" (px (graphHeight columns))
-                                , style "pointer-events" "none"
-                                , style "z-index" "10"
-                                ]
-                                (viewFloatingDragEdge sourceX sourceY targetPoint.x targetPoint.y)
-                            ]
+                            case maybeSourceNode of
+                                Just sourceNode ->
+                                    let
+                                        sourcePoint =
+                                            joinDragSourcePoint model columns joinDrag sourceColumn sourceIndex sourceNode
+
+                                        targetPoint =
+                                            dragTargetPoint model columns joinDrag sourcePoint.x sourcePoint.y
+                                    in
+                                    [ div
+                                        [ style "position" "absolute"
+                                        , style "left" "0"
+                                        , style "bottom" "0"
+                                        , style "width" (px (graphWidth columns))
+                                        , style "height" (px (graphHeight model columns))
+                                        , style "pointer-events" "none"
+                                        , style "z-index" "10"
+                                        ]
+                                        (viewFloatingDragEdge sourcePoint.x sourcePoint.y targetPoint.x targetPoint.y)
+                                    ]
+
+                                Nothing ->
+                                    []
 
                         Nothing ->
                             []
@@ -706,20 +1048,34 @@ viewDragEdge columns maybeJoinDrag =
             []
 
 
-dragTargetPoint : List Project.Column -> JoinDrag -> Int -> Int -> { x : Int, y : Int }
-dragTargetPoint columns joinDrag fallbackX fallbackY =
+dragTargetPoint : Model -> List Project.Column -> JoinDrag -> Int -> Int -> { x : Int, y : Int }
+dragTargetPoint model columns joinDrag fallbackX fallbackY =
     case joinDrag.graphOrigin of
         Just origin ->
             { x = round (joinDrag.mouse.x - origin.x)
-            , y = round (toFloat (graphHeight columns) - (joinDrag.mouse.y - origin.y))
+            , y = round (toFloat (graphHeight model columns) - (joinDrag.mouse.y - origin.y))
             }
 
         Nothing ->
             { x = fallbackX, y = fallbackY }
 
 
-viewVerticalEdges : List Project.Column -> List (Html Msg)
-viewVerticalEdges columns =
+joinDragSourcePoint : Model -> List Project.Column -> JoinDrag -> Project.Column -> Int -> Project.Node -> { x : Int, y : Int }
+joinDragSourcePoint model columns joinDrag sourceColumn sourceIndex sourceNode =
+    case ( joinDrag.graphOrigin, joinDrag.sourceButtonCenter ) of
+        ( Just origin, Just buttonCenter ) ->
+            { x = round (buttonCenter.x - origin.x)
+            , y = round (toFloat (graphHeight model columns) - (buttonCenter.y - origin.y))
+            }
+
+        _ ->
+            { x = columnX sourceColumn + cardWidth
+            , y = nodeCenter model sourceColumn sourceIndex sourceNode
+            }
+
+
+viewVerticalEdges : Model -> List Project.Column -> List (Html Msg)
+viewVerticalEdges model columns =
     columns
         |> List.concatMap
             (\column ->
@@ -727,17 +1083,17 @@ viewVerticalEdges columns =
                     |> List.indexedMap Tuple.pair
                     |> adjacentPairs
                     |> List.concatMap
-                        (\( ( sourceIndex, _ ), ( targetIndex, _ ) ) ->
+                        (\( ( sourceIndex, sourceNode ), ( targetIndex, _ ) ) ->
                             viewVerticalEdge
                                 (columnX column + (cardWidth // 2))
-                                (nodeBottom column sourceIndex + nodeHeight)
+                                (nodeTop model column sourceIndex sourceNode)
                                 (nodeBottom column targetIndex)
                         )
             )
 
 
-viewForkEdges : List Project.Column -> List (Html Msg)
-viewForkEdges columns =
+viewForkEdges : Model -> List Project.Column -> List (Html Msg)
+viewForkEdges model columns =
     columns
         |> List.concatMap
             (\column ->
@@ -745,11 +1101,14 @@ viewForkEdges columns =
                     Just forkRef ->
                         case Project.findColumn forkRef.sourceColumnId columns of
                             Just sourceColumn ->
-                                case Project.nodeRow sourceColumn forkRef.sourceNodeId of
-                                    Just sourceRow ->
+                                case ( Project.nodeIndex forkRef.sourceNodeId sourceColumn.nodes, Project.findNodeInColumn forkRef.sourceNodeId sourceColumn, column.nodes ) of
+                                    ( Just sourceIndex, Just sourceNode, targetNode :: _ ) ->
                                         let
-                                            y =
-                                                rowCenter sourceRow
+                                            sourceY =
+                                                nodeCenter model sourceColumn sourceIndex sourceNode
+
+                                            targetY =
+                                                nodeCenter model column 0 targetNode
 
                                             x1 =
                                                 columnX sourceColumn + cardWidth
@@ -757,9 +1116,9 @@ viewForkEdges columns =
                                             x2 =
                                                 columnX column
                                         in
-                                        viewHorizontalEdgeRight x1 x2 y
+                                        viewElbowEdgeRight x1 sourceY x2 targetY
 
-                                    Nothing ->
+                                    _ ->
                                         []
 
                             Nothing ->
@@ -770,8 +1129,8 @@ viewForkEdges columns =
             )
 
 
-viewJoinEdges : List Project.Column -> List (Html Msg)
-viewJoinEdges columns =
+viewJoinEdges : Model -> List Project.Column -> List (Html Msg)
+viewJoinEdges model columns =
     columns
         |> List.concatMap
             (\column ->
@@ -779,13 +1138,13 @@ viewJoinEdges columns =
                     Just joinRef ->
                         case ( Project.lastNode column, Project.findColumn joinRef.targetColumnId columns ) of
                             ( Just sourceNode, Just targetColumn ) ->
-                                case ( Project.nodeRow column sourceNode.id, Project.nodeRow targetColumn joinRef.targetNodeId ) of
-                                    ( Just sourceRow, Just targetRow ) ->
+                                case ( Project.nodeIndex sourceNode.id column.nodes, Project.nodeIndex joinRef.targetNodeId targetColumn.nodes, Project.findNodeInColumn joinRef.targetNodeId targetColumn ) of
+                                    ( Just sourceIndex, Just targetIndex, Just targetNode ) ->
                                         viewElbowEdgeLeft
                                             (columnX column)
-                                            (rowCenter sourceRow)
+                                            (nodeCenter model column sourceIndex sourceNode)
                                             (columnX targetColumn + cardWidth)
-                                            (rowCenter targetRow)
+                                            (nodeCenter model targetColumn targetIndex targetNode)
 
                                     _ ->
                                         []
@@ -862,6 +1221,45 @@ viewElbowEdgeLeft sourceX sourceY targetX targetY =
             :: (verticalSegment
                     ++ [ horizontalLine targetX midX targetY
                        , arrowLeft targetX targetY
+                       ]
+               )
+
+
+viewElbowEdgeRight : Int -> Int -> Int -> Int -> List (Html Msg)
+viewElbowEdgeRight sourceX sourceY targetX targetY =
+    if targetX <= sourceX then
+        []
+
+    else
+        let
+            midX =
+                sourceX + ((targetX - sourceX) // 2)
+
+            verticalStart =
+                min sourceY targetY
+
+            verticalEnd =
+                max sourceY targetY
+
+            verticalSegment =
+                if verticalEnd == verticalStart then
+                    []
+
+                else
+                    [ div
+                        [ edgeBase
+                        , style "left" (px midX)
+                        , style "bottom" (px verticalStart)
+                        , style "height" (px (verticalEnd - verticalStart))
+                        , style "border-left" ("1px dashed " ++ edgeColor)
+                        ]
+                        []
+                    ]
+        in
+        horizontalLine sourceX midX sourceY
+            :: (verticalSegment
+                    ++ [ horizontalLine midX targetX targetY
+                       , arrowRight targetX targetY
                        ]
                )
 
@@ -999,19 +1397,28 @@ nodeBottom column index =
     nodeRowValue column index * rowStep
 
 
+nodeTop : Model -> Project.Column -> Int -> Project.Node -> Int
+nodeTop model column index node =
+    nodeBottom column index + nodeCardHeight model node
+
+
+nodeCenter : Model -> Project.Column -> Int -> Project.Node -> Int
+nodeCenter model column index node =
+    nodeBottom column index + (nodeCardHeight model node // 2)
+
+
+nodeCardHeight : Model -> Project.Node -> Int
+nodeCardHeight model node =
+    model.nodeHeights
+        |> List.filter (.nodeId >> (==) node.id)
+        |> List.head
+        |> Maybe.map .height
+        |> Maybe.withDefault nodeHeight
+
+
 nodeGridRow : Int -> Project.Column -> Int -> Int
 nodeGridRow maxRow column index =
     maxRow - nodeRowValue column index + 1
-
-
-toolbarGridRow : Int -> Project.Column -> Int
-toolbarGridRow maxRow column =
-    maxRow - columnTopRow column + 1
-
-
-rowCenter : Int -> Int
-rowCenter row =
-    (row * rowStep) + (nodeHeight // 2)
 
 
 columnTopRow : Project.Column -> Int
@@ -1048,9 +1455,26 @@ graphWidth columns =
     (maxOrder * columnStep) + nodeGridWidth + 24
 
 
-graphHeight : List Project.Column -> Int
-graphHeight columns =
-    (maxGraphRow columns * rowStep) + nodeHeight + toolbarGap + toolbarHeight
+graphHeight : Model -> List Project.Column -> Int
+graphHeight model columns =
+    let
+        measuredHeight =
+            columns
+                |> List.concatMap
+                    (\column ->
+                        column.nodes
+                            |> List.indexedMap
+                                (\index node ->
+                                    nodeTop model column index node
+                                )
+                    )
+                |> List.maximum
+                |> Maybe.withDefault nodeHeight
+
+        slotHeight =
+            (maxGraphRow columns * rowStep) + nodeHeight
+    in
+    max slotHeight measuredHeight
 
 
 adjacentPairs : List a -> List ( a, a )

@@ -2,7 +2,7 @@ module Control.TodoGraphItem exposing (..)
 
 import Browser.Dom as Dom
 import Domain.Project as Project
-import Html exposing (Attribute, Html, button, div, input, span, text)
+import Html exposing (Attribute, Html, button, div, input, li, span, text, ul)
 import Html.Attributes exposing (autofocus, checked, class, id, style, type_, value)
 import Html.Events exposing (on, onBlur, onCheck, onClick, onInput)
 import Json.Decode as Decode
@@ -14,7 +14,8 @@ import UUID exposing (UUID)
 
 type TextEditState
     = NotEditing
-    | Editing String
+    | EditingText String
+    | EditingDescription String
 
 
 type alias Model =
@@ -32,6 +33,7 @@ type alias ViewOptions =
 type Msg
     = CheckboxToggle Bool
     | StartTextEdit
+    | StartDescriptionEdit String
     | TextInputFocused (Result Dom.Error ())
     | StopTextEdit
     | DraftChanged String
@@ -57,8 +59,14 @@ update msg model =
             )
 
         StartTextEdit ->
-            ( { model | textEditState = Editing model.node.text }
+            ( { model | textEditState = EditingText model.node.text }
             , Dom.focus (textInputId model.node.id)
+                |> Task.attempt TextInputFocused
+            )
+
+        StartDescriptionEdit description ->
+            ( { model | textEditState = EditingDescription description }
+            , Dom.focus (descriptionInputId model.node.id)
                 |> Task.attempt TextInputFocused
             )
 
@@ -66,16 +74,33 @@ update msg model =
             ( model, Cmd.none )
 
         StopTextEdit ->
-            ( { model | textEditState = NotEditing }
-            , Cmd.none
-            )
+            case model.textEditState of
+                EditingDescription draft ->
+                    ( { model
+                        | node = commitNodeDescription draft model.node
+                        , textEditState = NotEditing
+                      }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( { model | textEditState = NotEditing }
+                    , Cmd.none
+                    )
 
         DraftChanged newDraftText ->
             case model.textEditState of
-                Editing _ ->
+                EditingText _ ->
                     ( { model
                         | node = updateNodeText newDraftText model.node
-                        , textEditState = Editing newDraftText
+                        , textEditState = EditingText newDraftText
+                      }
+                    , Cmd.none
+                    )
+
+                EditingDescription _ ->
+                    ( { model
+                        | textEditState = EditingDescription newDraftText
                       }
                     , Cmd.none
                     )
@@ -108,6 +133,15 @@ updateNodeStatus status node =
 updateNodeText : String -> Project.Node -> Project.Node
 updateNodeText nodeText node =
     { node | text = nodeText }
+
+
+commitNodeDescription : String -> Project.Node -> Project.Node
+commitNodeDescription description node =
+    if String.trim description == "" then
+        { node | description = Nothing }
+
+    else
+        { node | description = Just description }
 
 
 startTimer : Time.Posix -> Project.Node -> Project.Node
@@ -148,7 +182,7 @@ viewText node editState =
                 ]
                 [ text node.text ]
 
-        Editing draft ->
+        EditingText draft ->
             input
                 [ value draft
                 , id (textInputId node.id)
@@ -160,43 +194,71 @@ viewText node editState =
                 ]
                 []
 
+        EditingDescription _ ->
+            span
+                [ class "flex-grow-1"
+                , onClick StartTextEdit
+                , style "cursor" "text"
+                , style "min-width" "0"
+                ]
+                [ text node.text ]
+
 
 textInputId : UUID -> String
 textInputId nodeId =
     "todo-graph-node-text-" ++ UUID.toString nodeId
 
 
-viewTimer : ViewOptions -> Maybe Project.Timer -> Html Msg
+descriptionInputId : UUID -> String
+descriptionInputId nodeId =
+    "todo-graph-node-description-" ++ UUID.toString nodeId
+
+
+viewDescription : Project.Node -> TextEditState -> String -> Html Msg
+viewDescription node editState description =
+    case editState of
+        EditingDescription draft ->
+            input
+                [ value draft
+                , id (descriptionInputId node.id)
+                , onInput DraftChanged
+                , onBlur StopTextEdit
+                , onEnter StopTextEdit
+                , autofocus True
+                , class "form-control form-control-sm flex-grow-1"
+                ]
+                []
+
+        _ ->
+            span
+                [ class "flex-grow-1"
+                , onClick (StartDescriptionEdit description)
+                , style "cursor" "text"
+                , style "min-width" "0"
+                ]
+                [ text description ]
+
+
+viewTimer : ViewOptions -> Maybe Project.Timer -> List (Html Msg)
 viewTimer options maybeTimer =
     case maybeTimer of
         Just timer ->
-            div [ class "d-flex align-items-center gap-2 ms-auto" ]
-                (if options.hideButtons then
-                    [ span [ class "text-muted small" ] [ text (formatSeconds (timerSeconds options.now timer)) ] ]
-
-                 else
-                    [ button
-                        [ onClick (timerButtonMsg timer)
-                        , class
-                            (case timer of
-                                Project.Started _ ->
-                                    "btn btn-sm btn-success"
-
-                                Project.Stopped seconds ->
-                                    if seconds > 0 then
-                                        "btn btn-sm btn-warning"
-
-                                    else
-                                        "btn btn-sm btn-outline-secondary"
-                            )
-                        ]
+            [ ul [ class "list-group list-group-flush" ]
+                [ li [ class "list-group-item d-flex align-items-center justify-content-between gap-2 px-3 py-1" ]
+                    [ span [ class "text-muted small" ] [ text (formatSeconds (timerSeconds options.now timer)) ]
+                    , button
+                        ([ onClick (timerButtonMsg timer)
+                         , class (timerButtonClass timer)
+                         ]
+                            ++ hiddenStyles options.hideButtons
+                        )
                         [ text (timerButtonLabel timer) ]
-                    , span [ class "text-muted small" ] [ text (formatSeconds (timerSeconds options.now timer)) ]
                     ]
-                )
+                ]
+            ]
 
         Nothing ->
-            text ""
+            []
 
 
 timerButtonMsg : Project.Timer -> Msg
@@ -221,6 +283,31 @@ timerButtonLabel timer =
 
             else
                 "Start"
+
+
+timerButtonClass : Project.Timer -> String
+timerButtonClass timer =
+    case timer of
+        Project.Started _ ->
+            "btn btn-sm btn-success"
+
+        Project.Stopped seconds ->
+            if seconds > 0 then
+                "btn btn-sm btn-warning"
+
+            else
+                "btn btn-sm btn-outline-secondary"
+
+
+hiddenStyles : Bool -> List (Attribute Msg)
+hiddenStyles hidden =
+    if hidden then
+        [ style "visibility" "hidden"
+        , style "pointer-events" "none"
+        ]
+
+    else
+        []
 
 
 timerSeconds : Maybe Time.Posix -> Project.Timer -> Int
@@ -274,24 +361,54 @@ onEnter msg =
         )
 
 
+viewContent : ViewOptions -> Model -> List (Html Msg)
+viewContent options model =
+    case model.node.description of
+        Just description ->
+            [ div
+                [ class "card-header d-flex align-items-start gap-2 px-3 py-2"
+                , style "min-width" "0"
+                ]
+                [ viewCheckbox model.node
+                , viewText model.node model.textEditState
+                ]
+            , div
+                [ class "card-body d-flex align-items-start gap-2 px-3 py-2"
+                , style "min-width" "0"
+                ]
+                [ viewDescription model.node model.textEditState description ]
+            ]
+                ++ viewTimer options model.node.timer
+
+        Nothing ->
+            [ div
+                [ class "card-body d-flex align-items-start gap-2 px-3 py-2"
+                , style "min-width" "0"
+                ]
+                [ viewCheckbox model.node
+                , viewText model.node model.textEditState
+                ]
+            ]
+                ++ viewTimer options model.node.timer
+
+
+viewCheckbox : Project.Node -> Html Msg
+viewCheckbox node =
+    input
+        [ type_ "checkbox"
+        , checked node.status
+        , onCheck CheckboxToggle
+        , style "width" "20px"
+        , style "height" "20px"
+        , style "flex" "0 0 auto"
+        ]
+        []
+
+
 view : ViewOptions -> Model -> Html Msg
 view options model =
     div
-        [ class "d-flex align-items-center gap-3 px-3 py-2"
-        , style "min-height" "58px"
-        , style "background" "#f5f5f5"
-        , style "border" "1px solid #ececec"
+        [ class "card d-flex flex-column"
         , style "box-sizing" "border-box"
         ]
-        [ input
-            [ type_ "checkbox"
-            , checked model.node.status
-            , onCheck CheckboxToggle
-            , style "width" "24px"
-            , style "height" "24px"
-            , style "flex" "0 0 auto"
-            ]
-            []
-        , viewText model.node model.textEditState
-        , viewTimer options model.node.timer
-        ]
+        (viewContent options model)

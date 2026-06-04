@@ -14,6 +14,7 @@ type alias Node =
     , text : String
     , status : Bool
     , timer : Maybe Timer
+    , description : Maybe String
     }
 
 
@@ -53,6 +54,7 @@ textNode id text =
     , text = text
     , status = False
     , timer = Nothing
+    , description = Nothing
     }
 
 
@@ -62,6 +64,7 @@ timerNode id text =
     , text = text
     , status = False
     , timer = Just (Stopped 0)
+    , description = Nothing
     }
 
 
@@ -98,6 +101,37 @@ appendNode columnId node project =
     }
 
 
+insertNodeAfter : UUID -> Node -> Project -> Project
+insertNodeAfter afterNodeId newNode project =
+    { project
+        | columns =
+            project.columns
+                |> List.map
+                    (\column ->
+                        { column
+                            | nodes =
+                                column.nodes
+                                    |> insertNodeAfterInList afterNodeId newNode
+                        }
+                    )
+    }
+        |> realignForkColumnBaseRows
+
+
+insertNodeAfterInList : UUID -> Node -> List Node -> List Node
+insertNodeAfterInList afterNodeId newNode nodes =
+    case nodes of
+        node :: rest ->
+            if node.id == afterNodeId then
+                node :: newNode :: rest
+
+            else
+                node :: insertNodeAfterInList afterNodeId newNode rest
+
+        [] ->
+            []
+
+
 updateNode : UUID -> Node -> Project -> Project
 updateNode nodeId updatedNode project =
     { project
@@ -112,6 +146,57 @@ updateNode nodeId updatedNode project =
                                         (\node ->
                                             if node.id == nodeId then
                                                 updatedNode
+
+                                            else
+                                                node
+                                        )
+                        }
+                    )
+    }
+
+
+addTimerToNode : UUID -> Project -> Project
+addTimerToNode nodeId project =
+    updateNodeIf nodeId
+        (\node ->
+            case node.timer of
+                Just _ ->
+                    node
+
+                Nothing ->
+                    { node | timer = Just (Stopped 0) }
+        )
+        project
+
+
+addDescriptionToNode : UUID -> Project -> Project
+addDescriptionToNode nodeId project =
+    updateNodeIf nodeId
+        (\node ->
+            case node.description of
+                Just _ ->
+                    node
+
+                Nothing ->
+                    { node | description = Just "" }
+        )
+        project
+
+
+updateNodeIf : UUID -> (Node -> Node) -> Project -> Project
+updateNodeIf nodeId update project =
+    { project
+        | columns =
+            project.columns
+                |> List.map
+                    (\column ->
+                        { column
+                            | nodes =
+                                column.nodes
+                                    |> List.map
+                                        (\node ->
+                                            if node.id == nodeId then
+                                                update node
 
                                             else
                                                 node
@@ -241,6 +326,22 @@ joinColumnToNode sourceColumnId targetNodeId project =
         project
 
 
+unjoinColumn : UUID -> Project -> Project
+unjoinColumn columnId project =
+    { project
+        | columns =
+            project.columns
+                |> List.map
+                    (\column ->
+                        if column.id == columnId then
+                            { column | joinedInto = Nothing }
+
+                        else
+                            column
+                    )
+    }
+
+
 canJoinColumnToNode : UUID -> UUID -> Project -> Bool
 canJoinColumnToNode sourceColumnId targetNodeId project =
     case ( findColumn sourceColumnId project.columns, locateNode targetNodeId project ) of
@@ -258,6 +359,11 @@ canJoinColumnToNode sourceColumnId targetNodeId project =
 
         _ ->
             False
+
+
+canCreateAfterNode : UUID -> Project -> Bool
+canCreateAfterNode nodeId project =
+    not (isJoinSourceInProject nodeId project)
 
 
 isReachable : UUID -> UUID -> Project -> Bool

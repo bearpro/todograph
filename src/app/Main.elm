@@ -134,6 +134,9 @@ changeRouteTo maybeRoute model =
                         , nodeUiStates = []
                         , joinDrag = Nothing
                         , now = Nothing
+                        , openNewMenu = Nothing
+                        , openAddMenu = Nothing
+                        , nodeHeights = []
                         }
             in
             ( { model | page = TodoGraph todoGraphModel }
