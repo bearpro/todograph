@@ -176,7 +176,7 @@ viewText node editState =
     case editState of
         NotEditing ->
             span
-                [ class "flex-grow-1"
+                [ class (nodeTextClass node)
                 , onClick StartTextEdit
                 , style "cursor" "text"
                 , style "min-width" "0"
@@ -197,12 +197,21 @@ viewText node editState =
 
         EditingDescription _ ->
             span
-                [ class "flex-grow-1"
+                [ class (nodeTextClass node)
                 , onClick StartTextEdit
                 , style "cursor" "text"
                 , style "min-width" "0"
                 ]
                 [ text node.text ]
+
+
+nodeTextClass : Project.Node -> String
+nodeTextClass node =
+    if node.status then
+        "flex-grow-1 text-decoration-line-through"
+
+    else
+        "flex-grow-1"
 
 
 textInputId : UUID -> String
@@ -416,6 +425,7 @@ viewCheckbox node =
         [ type_ "checkbox"
         , checked node.status
         , onCheck CheckboxToggle
+        , class "form-check-input todo-graph-node-checkbox"
         , style "width" "20px"
         , style "height" "20px"
         , style "flex" "0 0 auto"
