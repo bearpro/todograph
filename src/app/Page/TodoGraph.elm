@@ -8,7 +8,7 @@ import Control.TodoGraphItem as TodoGraphItem
 import Domain.Project as Project
 import Html exposing (Html, button, div, text)
 import Html.Attributes exposing (attribute, class, disabled, id, style, title, type_)
-import Html.Events exposing (on, onClick, onMouseEnter, onMouseLeave)
+import Html.Events exposing (custom, on, onClick, onMouseEnter, onMouseLeave)
 import Json.Decode as Decode
 import Platform.Cmd as Cmd
 import Random
@@ -42,16 +42,32 @@ type alias NodeHeight =
 type alias JoinDrag =
     { sourceColumnId : UUID
     , sourceNodeId : UUID
+    , mode : JoinMode
+    , startMouse : MousePoint
     , mouse : MousePoint
+    , activePointerId : Maybe Int
+    , backgroundPointerStart : Maybe JoinPointer
     , graphOrigin : Maybe MousePoint
     , sourceButtonCenter : Maybe MousePoint
     , hoveredNodeId : Maybe UUID
     }
 
 
+type JoinMode
+    = JoinPressing
+    | JoinDragging
+    | JoinLatched
+
+
 type alias MousePoint =
     { x : Float
     , y : Float
+    }
+
+
+type alias JoinPointer =
+    { id : Int
+    , point : MousePoint
     }
 
 
@@ -64,13 +80,16 @@ type Msg
     | AddDescription UUID
     | CreateFork UUID UUID
     | ForkGenerated UUID UUID UUID UUID
-    | StartJoinDrag UUID UUID MousePoint
+    | StartJoinPress UUID UUID JoinPointer
     | Unjoin UUID
     | GraphElementMeasured (Result Dom.Error Dom.Element)
     | JoinButtonMeasured (Result Dom.Error Dom.Element)
     | NodeCardMeasured UUID (Result Dom.Error Dom.Element)
-    | MoveJoinDrag MousePoint
-    | FinishJoinDrag MousePoint
+    | MoveJoinPointer JoinPointer
+    | ReleaseJoinPointer JoinPointer
+    | BackgroundJoinPointerDown JoinPointer
+    | JoinNodePointerDown JoinPointer
+    | JoinNodePointerUp UUID JoinPointer
     | HoverJoinTarget UUID
     | LeaveJoinTarget UUID
     | DeleteNode UUID
@@ -104,7 +123,7 @@ columnGap =
 
 rowGap : Int
 rowGap =
-    createButtonOverhang
+    createButtonOverhang * 3 // 2
 
 
 createButtonSize : Int
@@ -135,6 +154,16 @@ createButtonSideOverhang =
 edgeColor : String
 edgeColor =
     "#61666d"
+
+
+joinDragThreshold : Float
+joinDragThreshold =
+    6
+
+
+mouseFallbackPointerId : Int
+mouseFallbackPointerId =
+    -1
 
 
 graphRootId : String
@@ -241,26 +270,17 @@ update msg model =
             , measureProjectNodes nextProject
             )
 
-        StartJoinDrag sourceColumnId sourceNodeId mouse ->
-            ( { model
-                | joinDrag =
-                    Just
-                        { sourceColumnId = sourceColumnId
-                        , sourceNodeId = sourceNodeId
-                        , mouse = mouse
-                        , graphOrigin = Nothing
-                        , sourceButtonCenter = Nothing
-                        , hoveredNodeId = Nothing
-                        }
-                , openAddMenu = Nothing
-              }
-            , Cmd.batch
-                [ Dom.getElement graphRootId
-                    |> Task.attempt GraphElementMeasured
-                , Dom.getElement (joinButtonId sourceNodeId)
-                    |> Task.attempt JoinButtonMeasured
-                ]
-            )
+        StartJoinPress sourceColumnId sourceNodeId pointer ->
+            case model.joinDrag of
+                Just joinDrag ->
+                    if joinDrag.mode == JoinLatched && joinDrag.sourceNodeId == sourceNodeId then
+                        ( { model | joinDrag = Nothing, openAddMenu = Nothing }, Cmd.none )
+
+                    else
+                        startJoinPress sourceColumnId sourceNodeId pointer model
+
+                Nothing ->
+                    startJoinPress sourceColumnId sourceNodeId pointer model
 
         Unjoin columnId ->
             let
@@ -331,30 +351,65 @@ update msg model =
                 Err _ ->
                     ( model, Cmd.none )
 
-        MoveJoinDrag mouse ->
+        MoveJoinPointer pointer ->
             ( { model
                 | joinDrag =
                     model.joinDrag
-                        |> Maybe.map (\joinDrag -> { joinDrag | mouse = mouse })
+                        |> Maybe.map (moveJoinPointer pointer)
               }
             , Cmd.none
             )
 
-        FinishJoinDrag mouse ->
+        ReleaseJoinPointer pointer ->
             case model.joinDrag of
                 Just joinDrag ->
-                    let
-                        nextProject =
-                            joinDrag.hoveredNodeId
-                                |> Maybe.map
-                                    (\targetNodeId ->
-                                        Project.joinColumnToNode joinDrag.sourceColumnId targetNodeId model.project
-                                    )
-                                |> Maybe.withDefault model.project
-                    in
-                    ( { model | project = nextProject, joinDrag = Nothing, openAddMenu = Nothing }
-                    , measureProjectNodes nextProject
-                    )
+                    releaseJoinPointer pointer joinDrag model
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        BackgroundJoinPointerDown pointer ->
+            ( { model
+                | joinDrag =
+                    model.joinDrag
+                        |> Maybe.map
+                            (\joinDrag ->
+                                if joinDrag.mode == JoinLatched then
+                                    { joinDrag
+                                        | mouse = pointer.point
+                                        , backgroundPointerStart = Just pointer
+                                    }
+
+                                else
+                                    joinDrag
+                            )
+              }
+            , Cmd.none
+            )
+
+        JoinNodePointerDown pointer ->
+            ( { model
+                | joinDrag =
+                    model.joinDrag
+                        |> Maybe.map
+                            (\joinDrag ->
+                                if joinDrag.mode == JoinLatched then
+                                    { joinDrag
+                                        | mouse = pointer.point
+                                        , backgroundPointerStart = Nothing
+                                    }
+
+                                else
+                                    joinDrag
+                            )
+              }
+            , Cmd.none
+            )
+
+        JoinNodePointerUp nodeId pointer ->
+            case model.joinDrag of
+                Just joinDrag ->
+                    releaseJoinNodePointer nodeId pointer joinDrag model
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -420,6 +475,219 @@ update msg model =
             )
 
 
+startJoinPress : UUID -> UUID -> JoinPointer -> Model -> ( Model, Cmd Msg )
+startJoinPress sourceColumnId sourceNodeId pointer model =
+    ( { model
+        | joinDrag =
+            Just
+                { sourceColumnId = sourceColumnId
+                , sourceNodeId = sourceNodeId
+                , mode = JoinPressing
+                , startMouse = pointer.point
+                , mouse = pointer.point
+                , activePointerId = Just pointer.id
+                , backgroundPointerStart = Nothing
+                , graphOrigin = Nothing
+                , sourceButtonCenter = Nothing
+                , hoveredNodeId = Nothing
+                }
+        , openAddMenu = Nothing
+      }
+    , Cmd.batch
+        [ Dom.getElement graphRootId
+            |> Task.attempt GraphElementMeasured
+        , Dom.getElement (joinButtonId sourceNodeId)
+            |> Task.attempt JoinButtonMeasured
+        ]
+    )
+
+
+moveJoinPointer : JoinPointer -> JoinDrag -> JoinDrag
+moveJoinPointer pointer joinDrag =
+    case joinDrag.mode of
+        JoinPressing ->
+            if isActiveJoinPointer pointer joinDrag then
+                { joinDrag
+                    | mouse = pointer.point
+                    , mode =
+                        if movedBeyondJoinThreshold joinDrag.startMouse pointer.point then
+                            JoinDragging
+
+                        else
+                            JoinPressing
+                }
+
+            else
+                joinDrag
+
+        JoinDragging ->
+            if isActiveJoinPointer pointer joinDrag then
+                { joinDrag | mouse = pointer.point }
+
+            else
+                joinDrag
+
+        JoinLatched ->
+            { joinDrag | mouse = pointer.point }
+
+
+releaseJoinPointer : JoinPointer -> JoinDrag -> Model -> ( Model, Cmd Msg )
+releaseJoinPointer pointer joinDrag model =
+    case joinDrag.mode of
+        JoinPressing ->
+            if isActiveJoinPointer pointer joinDrag then
+                ( { model
+                    | joinDrag =
+                        Just
+                            { joinDrag
+                                | mode = JoinLatched
+                                , mouse = pointer.point
+                                , activePointerId = Nothing
+                            }
+                  }
+                , Cmd.none
+                )
+
+            else
+                ( model, Cmd.none )
+
+        JoinDragging ->
+            if isActiveJoinPointer pointer joinDrag then
+                finishJoin joinDrag.hoveredNodeId model
+
+            else
+                ( model, Cmd.none )
+
+        JoinLatched ->
+            case joinDrag.backgroundPointerStart of
+                Just startPointer ->
+                    if startPointer.id == pointer.id || pointer.id == mouseFallbackPointerId then
+                        if movedBeyondJoinThreshold startPointer.point pointer.point then
+                            ( { model
+                                | joinDrag =
+                                    Just
+                                        { joinDrag
+                                            | mouse = pointer.point
+                                            , backgroundPointerStart = Nothing
+                                        }
+                              }
+                            , Cmd.none
+                            )
+
+                        else
+                            cancelJoin model
+
+                    else
+                        ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+
+releaseJoinNodePointer : UUID -> JoinPointer -> JoinDrag -> Model -> ( Model, Cmd Msg )
+releaseJoinNodePointer nodeId pointer joinDrag model =
+    case joinDrag.mode of
+        JoinPressing ->
+            if joinDrag.sourceNodeId == nodeId && isActiveJoinPointer pointer joinDrag then
+                ( { model
+                    | joinDrag =
+                        Just
+                            { joinDrag
+                                | mode = JoinLatched
+                                , mouse = pointer.point
+                                , activePointerId = Nothing
+                            }
+                  }
+                , Cmd.none
+                )
+
+            else
+                ( model, Cmd.none )
+
+        JoinDragging ->
+            if Project.canJoinColumnToNode joinDrag.sourceColumnId nodeId model.project then
+                finishJoin (Just nodeId) model
+
+            else
+                cancelJoin model
+
+        JoinLatched ->
+            if Project.canJoinColumnToNode joinDrag.sourceColumnId nodeId model.project then
+                finishJoin (Just nodeId) model
+
+            else
+                ( { model
+                    | joinDrag =
+                        Just
+                            { joinDrag
+                                | mouse = pointer.point
+                                , backgroundPointerStart = Nothing
+                            }
+                  }
+                , Cmd.none
+                )
+
+
+finishJoin : Maybe UUID -> Model -> ( Model, Cmd Msg )
+finishJoin maybeTargetNodeId model =
+    case model.joinDrag of
+        Just joinDrag ->
+            case maybeTargetNodeId of
+                Just targetNodeId ->
+                    if Project.canJoinColumnToNode joinDrag.sourceColumnId targetNodeId model.project then
+                        let
+                            nextProject =
+                                Project.joinColumnToNode joinDrag.sourceColumnId targetNodeId model.project
+                        in
+                        ( { model
+                            | project = nextProject
+                            , joinDrag = Nothing
+                            , openAddMenu = Nothing
+                          }
+                        , measureProjectNodes nextProject
+                        )
+
+                    else
+                        cancelJoin model
+
+                Nothing ->
+                    cancelJoin model
+
+        Nothing ->
+            ( model, Cmd.none )
+
+
+cancelJoin : Model -> ( Model, Cmd Msg )
+cancelJoin model =
+    ( { model | joinDrag = Nothing, openAddMenu = Nothing }, Cmd.none )
+
+
+isActiveJoinPointer : JoinPointer -> JoinDrag -> Bool
+isActiveJoinPointer pointer joinDrag =
+    if pointer.id == mouseFallbackPointerId then
+        True
+
+    else
+        case joinDrag.activePointerId of
+            Just activePointerId ->
+                activePointerId == pointer.id
+
+            Nothing ->
+                True
+
+
+movedBeyondJoinThreshold : MousePoint -> MousePoint -> Bool
+movedBeyondJoinThreshold start current =
+    let
+        dx =
+            current.x - start.x
+
+        dy =
+            current.y - start.y
+    in
+    ((dx * dx) + (dy * dy)) >= (joinDragThreshold * joinDragThreshold)
+
+
 subscriptions : Model -> Sub Msg
 subscriptions model =
     Sub.batch
@@ -431,8 +699,8 @@ subscriptions model =
         , case model.joinDrag of
             Just _ ->
                 Sub.batch
-                    [ BrowserEvents.onMouseMove (Decode.map MoveJoinDrag mousePointDecoder)
-                    , BrowserEvents.onMouseUp (Decode.map FinishJoinDrag mousePointDecoder)
+                    [ BrowserEvents.onMouseMove (Decode.map MoveJoinPointer mouseJoinPointerDecoder)
+                    , BrowserEvents.onMouseUp (Decode.map ReleaseJoinPointer mouseJoinPointerDecoder)
                     ]
 
             Nothing ->
@@ -645,20 +913,22 @@ view model =
                 , style "justify-content" "flex-start"
                 ]
                 [ div
-                    [ id graphRootId
-                    , style "position" "relative"
-                    , style "display" "grid"
-                    , style "grid-template-columns" ("repeat(" ++ String.fromInt (columnCount sortedColumns) ++ ", " ++ px cardWidth ++ ")")
-                    , style "grid-template-rows" (gridTemplateRows model sortedColumns)
-                    , style "column-gap" (px columnGap)
-                    , style "row-gap" (px rowGap)
-                    , style "align-content" "end"
-                    , style "justify-content" "start"
-                    , style "width" (px (graphWidth sortedColumns))
-                    , style "height" (px (graphHeight model sortedColumns))
-                    , style "min-width" (px (graphWidth sortedColumns))
-                    , style "min-height" (px (graphHeight model sortedColumns))
-                    ]
+                    ([ id graphRootId
+                     , style "position" "relative"
+                     , style "display" "grid"
+                     , style "grid-template-columns" ("repeat(" ++ String.fromInt (columnCount sortedColumns) ++ ", " ++ px cardWidth ++ ")")
+                     , style "grid-template-rows" (gridTemplateRows model sortedColumns)
+                     , style "column-gap" (px columnGap)
+                     , style "row-gap" (px rowGap)
+                     , style "align-content" "end"
+                     , style "justify-content" "start"
+                     , style "width" (px (graphWidth sortedColumns))
+                     , style "height" (px (graphHeight model sortedColumns))
+                     , style "min-width" (px (graphWidth sortedColumns))
+                     , style "min-height" (px (graphHeight model sortedColumns))
+                     ]
+                        ++ joinGraphPointerAttributes model.joinDrag
+                    )
                     (viewEdges model sortedColumns
                         ++ viewDragEdge model sortedColumns model.joinDrag
                         ++ viewNodes hideButtons maxRow model sortedColumns
@@ -697,23 +967,25 @@ viewNode hideButtons maxRow model columns column index node =
                 |> List.map (Html.map (GraphItemMsg node.id))
     in
     div
-        [ style "position" "relative"
-        , style "grid-column" (String.fromInt (column.order + 1))
-        , style "grid-row" (String.fromInt (nodeGridRow maxRow column index))
-        , style "width" (px nodeGridWidth)
-        , style "height" (px (rowHeight model columns currentRow))
-        , style "align-self" "stretch"
-        , style "justify-self" "start"
-        , style "z-index"
+        ([ style "position" "relative"
+         , style "grid-column" (String.fromInt (column.order + 1))
+         , style "grid-row" (String.fromInt (nodeGridRow maxRow column index))
+         , style "width" (px nodeGridWidth)
+         , style "height" (px (rowHeight model columns currentRow))
+         , style "align-self" "stretch"
+         , style "justify-self" "start"
+         , style "z-index"
             (if model.openAddMenu == Just node.id then
                 "8"
 
              else
                 "3"
             )
-        , onMouseEnter (HoverJoinTarget node.id)
-        , onMouseLeave (LeaveJoinTarget node.id)
-        ]
+         , onMouseEnter (HoverJoinTarget node.id)
+         , onMouseLeave (LeaveJoinTarget node.id)
+         ]
+            ++ joinNodePointerAttributes model.joinDrag node.id
+        )
         [ viewNewItemButton model.joinDrag model.project node cardHeight
         , viewNewColumnButton model.joinDrag model.project column node cardHeight
         , div
@@ -796,6 +1068,45 @@ hiddenStyles hidden =
 
     else
         []
+
+
+joinGraphPointerAttributes : Maybe JoinDrag -> List (Html.Attribute Msg)
+joinGraphPointerAttributes maybeJoinDrag =
+    case maybeJoinDrag of
+        Just _ ->
+            [ on "pointermove" (Decode.map MoveJoinPointer joinPointerDecoder)
+            , on "pointerup" (Decode.map ReleaseJoinPointer joinPointerDecoder)
+            , on "pointerdown" (Decode.map BackgroundJoinPointerDown joinPointerDecoder)
+            ]
+
+        Nothing ->
+            []
+
+
+joinNodePointerAttributes : Maybe JoinDrag -> UUID -> List (Html.Attribute Msg)
+joinNodePointerAttributes maybeJoinDrag nodeId =
+    case maybeJoinDrag of
+        Just _ ->
+            [ onPointerStopAndPrevent "pointerdown" JoinNodePointerDown
+            , onPointerStopAndPrevent "pointerup" (JoinNodePointerUp nodeId)
+            ]
+
+        Nothing ->
+            []
+
+
+onPointerStopAndPrevent : String -> (JoinPointer -> Msg) -> Html.Attribute Msg
+onPointerStopAndPrevent eventName toMsg =
+    custom eventName
+        (Decode.map
+            (\pointer ->
+                { message = toMsg pointer
+                , stopPropagation = True
+                , preventDefault = True
+                }
+            )
+            joinPointerDecoder
+        )
 
 
 viewActionGroup : Maybe JoinDrag -> Project.Project -> Maybe UUID -> Project.Column -> Int -> Project.Node -> Html Msg
@@ -912,13 +1223,13 @@ viewJoinButton maybeJoinDrag column index node =
 
     else
         [ button
-            ([ on "mousedown" (Decode.map (StartJoinDrag column.id node.id) mousePointDecoder)
+            ([ onPointerStopAndPrevent "pointerdown" (StartJoinPress column.id node.id)
              , type_ "button"
              , id (joinButtonId node.id)
-             , class "btn btn-outline-primary btn-icon"
+             , class "btn btn-outline-primary btn-icon todo-graph-join-button"
              , title "Join"
              , attribute "aria-label" "Join"
-             , disabled (isJoining || not (canStartJoinDrag column index))
+             , disabled ((isJoining && not isSource) || not (canStartJoinDrag column index))
              ]
                 ++ hiddenStyles (isJoining && not isSource)
             )
@@ -1506,10 +1817,27 @@ px value =
     String.fromInt value ++ "px"
 
 
-mousePointDecoder : Decode.Decoder MousePoint
-mousePointDecoder =
+joinPointerDecoder : Decode.Decoder JoinPointer
+joinPointerDecoder =
+    Decode.map3
+        (\pointerId x y ->
+            { id = pointerId
+            , point = { x = x, y = y }
+            }
+        )
+        (Decode.field "pointerId" Decode.int)
+        (Decode.field "pageX" Decode.float)
+        (Decode.field "pageY" Decode.float)
+
+
+mouseJoinPointerDecoder : Decode.Decoder JoinPointer
+mouseJoinPointerDecoder =
     Decode.map2
-        (\x y -> { x = x, y = y })
+        (\x y ->
+            { id = mouseFallbackPointerId
+            , point = { x = x, y = y }
+            }
+        )
         (Decode.field "pageX" Decode.float)
         (Decode.field "pageY" Decode.float)
 

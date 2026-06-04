@@ -107,6 +107,10 @@ body {
   height: 1.125rem;
 }
 
+.todo-graph-join-button {
+  touch-action: none;
+}
+
 .app-layout {
   display: flex;
   min-height: calc(100vh - 57px);
