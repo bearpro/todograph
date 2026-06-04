@@ -8,7 +8,7 @@
     "declaration": true,
     "sourceMap": true,
     "outDir": "./dist",
-    "rootDir": ".",
+    "rootDir": "src",
     "strict": true,
     "esModuleInterop": true,
     "experimentalDecorators": true,
@@ -20,9 +20,7 @@
     ]
   },
   "include": [
-    "*.ts",
-    "database/**/*.ts",
-    "projects/**/*.ts"
+    "src/**/*.ts"
   ],
   "exclude": [
     "dist",

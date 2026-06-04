@@ -4,8 +4,8 @@ import {
   NotFoundException
 } from "@nestjs/common";
 
-import { ProjectsController } from "./projects.controller";
-import { ProjectsService } from "./projects.service";
+import { ProjectsController } from "../../src/projects/projects.controller";
+import { ProjectsService } from "../../src/projects/projects.service";
 
 function responseOf(error: unknown): unknown {
   if (error instanceof HttpException) {

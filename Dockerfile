@@ -13,7 +13,7 @@ COPY src/app/ ./
 
 RUN mkdir -p ./dist \
   && rm -rf ./dist/* \
-  && elm make Main.elm --optimize --output=dist/main.js \
+  && elm make src/Main.elm --optimize --output=dist/main.js \
   && cp -R ./static/. ./dist/
 
 

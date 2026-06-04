@@ -2,7 +2,9 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "isolatedModules": true,
+    "rootDir": ".",
     "types": ["node", "jest"]
   },
-  "include": ["*.ts", "database/**/*.ts", "projects/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["dist", "node_modules"]
 }
