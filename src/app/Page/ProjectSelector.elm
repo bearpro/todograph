@@ -3,9 +3,9 @@ module Page.ProjectSelector exposing (Model, Msg(..), init, update, view, viewPa
 import Browser exposing (Document)
 import Browser.Dom as Dom
 import Domain.Project as DomainProject
-import Html exposing (Attribute, Html, a, button, div, h2, input, li, text, ul)
+import Html exposing (Attribute, Html, a, button, div, h2, input, label, li, text, ul)
 import Html.Attributes as Attr exposing (class, disabled, title, type_, value)
-import Html.Events exposing (on, onClick, onInput)
+import Html.Events exposing (on, onCheck, onClick, onInput)
 import Json.Decode as Decode
 import Platform.Cmd as Cmd
 import Random
@@ -17,6 +17,7 @@ import UUID exposing (UUID)
 type alias Project =
     { id : UUID
     , name : Maybe String
+    , sync : Bool
     }
 
 
@@ -51,6 +52,8 @@ type Msg
     | RequestProjectDelete UUID
     | ConfirmProjectDelete UUID
     | CancelProjectDelete
+    | ToggleProjectSync UUID Bool
+    | CopyProjectLink UUID
 
 
 init : List DomainProject.Project -> Model
@@ -66,6 +69,7 @@ projectSummary : DomainProject.Project -> Project
 projectSummary project =
     { id = project.id
     , name = project.name
+    , sync = project.sync
     }
 
 
@@ -89,7 +93,7 @@ update msg model =
         NewProjectGenerated id ->
             let
                 newProject =
-                    { id = id, name = Nothing }
+                    { id = id, name = Nothing, sync = False }
 
                 newModel =
                     { model
@@ -178,6 +182,14 @@ update msg model =
             , Cmd.none
             )
 
+        ToggleProjectSync projectId sync ->
+            ( { model | projects = List.map (setProjectSync projectId sync) model.projects }
+            , Cmd.none
+            )
+
+        CopyProjectLink _ ->
+            ( model, Cmd.none )
+
 
 renameProject : UUID -> Maybe ProjectNameEdit -> Project -> Project
 renameProject id maybeEdit project =
@@ -191,6 +203,15 @@ renameProject id maybeEdit project =
 
         Nothing ->
             project
+
+
+setProjectSync : UUID -> Bool -> Project -> Project
+setProjectSync id sync project =
+    if project.id == id then
+        { project | sync = sync }
+
+    else
+        project
 
 
 nameFromDraft : String -> Maybe String
@@ -268,20 +289,63 @@ viewProjectListItem activeProjectId maybeEdit deleteConfirm project =
 viewProjectRow : Bool -> Project -> Html Msg
 viewProjectRow isActive project =
     div [ class "d-flex align-items-center gap-2" ]
-        [ a
-            [ Route.href (Route.Project project.id)
-            , onClick (OpenProject (UUID.toString project.id))
-            , class
-                ("flex-grow-1 text-decoration-none"
-                    ++ (if isActive then
-                            " text-white"
+        [ div [ class "flex-grow-1 min-w-0" ]
+            [ a
+                [ Route.href (Route.Project project.id)
+                , onClick (OpenProject (UUID.toString project.id))
+                , class
+                    ("d-block text-truncate text-decoration-none"
+                        ++ (if isActive then
+                                " text-white"
 
-                        else
-                            " text-body"
-                       )
-                )
+                            else
+                                " text-body"
+                           )
+                    )
+                ]
+                [ text (projectDisplayName project) ]
+            , div [ class "d-flex align-items-center gap-2 mt-1" ]
+                [ div [ class "form-check form-check-inline mb-0" ]
+                    [ input
+                        [ type_ "checkbox"
+                        , Attr.id (syncCheckboxId project.id)
+                        , Attr.checked project.sync
+                        , onCheck (ToggleProjectSync project.id)
+                        , class "form-check-input"
+                        ]
+                        []
+                    , label
+                        [ Attr.for (syncCheckboxId project.id)
+                        , class
+                            ("form-check-label small"
+                                ++ (if isActive then
+                                        " text-white"
+
+                                    else
+                                        " text-muted"
+                                   )
+                            )
+                        ]
+                        [ text "Sync" ]
+                    ]
+                , if project.sync then
+                    button
+                        [ onClick (CopyProjectLink project.id)
+                        , class
+                            (if isActive then
+                                "btn btn-light btn-sm"
+
+                             else
+                                "btn btn-outline-secondary btn-sm"
+                            )
+                        , type_ "button"
+                        ]
+                        [ text "Copy link" ]
+
+                  else
+                    text ""
+                ]
             ]
-            [ text (projectDisplayName project) ]
         , button
             [ onClick (StartProjectRename project)
             , class
@@ -383,6 +447,11 @@ viewProjectRename isActive project maybeEdit =
 projectNameInputId : UUID -> String
 projectNameInputId projectId =
     "project-name-" ++ UUID.toString projectId
+
+
+syncCheckboxId : UUID -> String
+syncCheckboxId projectId =
+    "project-sync-" ++ UUID.toString projectId
 
 
 onEnter : msg -> Attribute msg

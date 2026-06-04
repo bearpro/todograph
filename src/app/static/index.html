@@ -18,12 +18,14 @@
 
     <script src="/main.js"></script>
     <script src="/ports/project-storage.js"></script>
+    <script src="/ports/project-sync.js"></script>
     <script>
       const app = Elm.Main.init({
         node: document.getElementById("app")
       });
 
       window.TodoGraphProjectStorage.init(app);
+      window.TodoGraphProjectSync.init(app);
     </script>
   </body>
 </html>

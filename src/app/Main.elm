@@ -8,10 +8,12 @@ import Html exposing (Html)
 import Html.Attributes exposing (class)
 import Html.Events exposing (onClick)
 import Json.Decode as Decode
+import Json.Encode as Encode
 import Page.AppInit as AppInitPage
 import Page.ProjectSelector as ProjectSelectorPage
 import Page.TodoGraph as TodoGraphPage
 import Ports.ProjectStorage as ProjectStorage
+import Ports.ProjectSync as ProjectSync
 import Random
 import Route exposing (Route)
 import Task
@@ -23,6 +25,8 @@ import Url exposing (Url)
 type Page
     = AppInit AppInitPage.Model
     | TodoGraph TodoGraphPage.Model
+    | ProjectLoading UUID
+    | ProjectLoadFailed UUID String
     | NoProjectSelected
 
 
@@ -47,6 +51,13 @@ type Msg
     | StorageFailed String
     | FirstProjectGenerated UUID UUID
     | ProjectTimestampedForSave UUID Time.Posix
+    | ServerProjectsChecked Decode.Value
+    | ServerProjectVersionLoaded Decode.Value
+    | ServerProjectLoaded Decode.Value
+    | ServerProjectSaveAccepted Decode.Value
+    | ServerProjectSaveRejected Decode.Value
+    | ServerProjectUpdated Decode.Value
+    | SyncFailed Decode.Value
     | ToggleDesktopSidebar
     | ToggleMobileSidebar
     | CloseMobileSidebar
@@ -79,6 +90,12 @@ currentRoute page =
         TodoGraph model ->
             Route.Project model.project.id
 
+        ProjectLoading projectId ->
+            Route.Project projectId
+
+        ProjectLoadFailed projectId _ ->
+            Route.Project projectId
+
 
 currentProjectName : Page -> Maybe String
 currentProjectName page =
@@ -98,6 +115,24 @@ viewWorkspace page =
 
         TodoGraph model ->
             mapDocument TodoGraphMsg (TodoGraphPage.view model)
+
+        ProjectLoading _ ->
+            { title = "Loading project"
+            , body =
+                [ Html.div
+                    [ class "p-4" ]
+                    [ Html.text "Loading project..." ]
+                ]
+            }
+
+        ProjectLoadFailed _ message ->
+            { title = "Project not found"
+            , body =
+                [ Html.div
+                    [ class "p-4 text-danger" ]
+                    [ Html.text message ]
+                ]
+            }
 
         NoProjectSelected ->
             { title = "Projects"
@@ -204,6 +239,13 @@ subscriptions model =
     Sub.batch
         [ ProjectStorage.projectsLoaded ProjectsLoaded
         , ProjectStorage.storageFailed StorageFailed
+        , ProjectSync.serverProjectsChecked ServerProjectsChecked
+        , ProjectSync.serverProjectVersionLoaded ServerProjectVersionLoaded
+        , ProjectSync.serverProjectLoaded ServerProjectLoaded
+        , ProjectSync.serverProjectSaveAccepted ServerProjectSaveAccepted
+        , ProjectSync.serverProjectSaveRejected ServerProjectSaveRejected
+        , ProjectSync.serverProjectUpdated ServerProjectUpdated
+        , ProjectSync.syncFailed SyncFailed
         , case model.page of
             TodoGraph page ->
                 TodoGraphPage.subscriptions page
@@ -224,7 +266,10 @@ changeRouteTo maybeRoute model =
                 , route = Just Route.ProjectSelector
                 , mobileSidebarOpen = False
               }
-            , Nav.replaceUrl model.key "/"
+            , Cmd.batch
+                [ unsubscribeCurrentProjectExcept Nothing model
+                , Nav.replaceUrl model.key "/"
+                ]
             )
 
         Just Route.ProjectSelector ->
@@ -234,7 +279,7 @@ changeRouteTo maybeRoute model =
                 , route = maybeRoute
                 , mobileSidebarOpen = False
               }
-            , Cmd.none
+            , unsubscribeCurrentProjectExcept Nothing model
             )
 
         Just (Route.Project projectId) ->
@@ -249,17 +294,24 @@ changeRouteTo maybeRoute model =
                         , route = maybeRoute
                         , mobileSidebarOpen = False
                       }
-                    , Cmd.map TodoGraphMsg cmd
+                    , Cmd.batch
+                        [ unsubscribeCurrentProjectExcept (Just project.id) model
+                        , Cmd.map TodoGraphMsg cmd
+                        , projectOpenSyncCmd project
+                        ]
                     )
 
                 Nothing ->
                     ( { model
-                        | page = NoProjectSelected
+                        | page = ProjectLoading projectId
                         , projectSelector = ProjectSelectorPage.init model.projects
-                        , route = Just Route.ProjectSelector
+                        , route = maybeRoute
                         , mobileSidebarOpen = False
                       }
-                    , Nav.replaceUrl model.key "/"
+                    , Cmd.batch
+                        [ unsubscribeCurrentProjectExcept Nothing model
+                        , fetchServerProjectCmd projectId
+                        ]
                     )
 
 
@@ -312,6 +364,247 @@ saveProjectCmd project =
 deleteProjectCmd : UUID -> Cmd Msg
 deleteProjectCmd projectId =
     ProjectStorage.deleteProject (UUID.toString projectId)
+
+
+projectIdString : UUID -> String
+projectIdString projectId =
+    UUID.toString projectId
+
+
+projectUpdatedAtMillis : Project.Project -> Int
+projectUpdatedAtMillis project =
+    Time.posixToMillis project.updatedAt
+
+
+serverProjectEnvelopeEncoder : Project.Project -> Encode.Value
+serverProjectEnvelopeEncoder project =
+    Encode.object
+        [ ( "projectId", Encode.string (projectIdString project.id) )
+        , ( "updatedAt", Encode.int (projectUpdatedAtMillis project) )
+        , ( "payload", Project.projectPayloadEncoder project )
+        ]
+
+
+serverProjectCheckEncoder : Project.Project -> Encode.Value
+serverProjectCheckEncoder project =
+    Encode.object
+        [ ( "projectId", Encode.string (projectIdString project.id) )
+        , ( "updatedAt", Encode.int (projectUpdatedAtMillis project) )
+        ]
+
+
+saveServerProjectCmd : Project.Project -> Cmd Msg
+saveServerProjectCmd project =
+    ProjectSync.saveServerProject (serverProjectEnvelopeEncoder project)
+
+
+debounceSaveServerProjectCmd : Project.Project -> Cmd Msg
+debounceSaveServerProjectCmd project =
+    ProjectSync.debounceSaveServerProject (serverProjectEnvelopeEncoder project)
+
+
+debounceSaveSyncedProjectCmd : Project.Project -> Cmd Msg
+debounceSaveSyncedProjectCmd project =
+    if project.sync then
+        debounceSaveServerProjectCmd project
+
+    else
+        Cmd.none
+
+
+checkSyncedProjectsCmd : List Project.Project -> Cmd Msg
+checkSyncedProjectsCmd projects =
+    let
+        syncedProjects =
+            projects
+                |> List.filter .sync
+    in
+    if List.isEmpty syncedProjects then
+        Cmd.none
+
+    else
+        ProjectSync.checkServerProjects
+            (Encode.list serverProjectCheckEncoder syncedProjects)
+
+
+fetchServerProjectCmd : UUID -> Cmd Msg
+fetchServerProjectCmd projectId =
+    ProjectSync.fetchServerProject (projectIdString projectId)
+
+
+fetchServerProjectVersionCmd : UUID -> Cmd Msg
+fetchServerProjectVersionCmd projectId =
+    ProjectSync.fetchServerProjectVersion (projectIdString projectId)
+
+
+subscribeProjectCmd : UUID -> Cmd Msg
+subscribeProjectCmd projectId =
+    ProjectSync.subscribeProject (projectIdString projectId)
+
+
+unsubscribeProjectCmd : UUID -> Cmd Msg
+unsubscribeProjectCmd projectId =
+    ProjectSync.unsubscribeProject (projectIdString projectId)
+
+
+copyProjectLinkCmd : UUID -> Cmd Msg
+copyProjectLinkCmd projectId =
+    ProjectSync.copyProjectLink ("/p/" ++ projectIdString projectId)
+
+
+activeSyncedProjectId : Page -> Maybe UUID
+activeSyncedProjectId page =
+    case page of
+        TodoGraph todoGraphModel ->
+            if todoGraphModel.project.sync then
+                Just todoGraphModel.project.id
+
+            else
+                Nothing
+
+        _ ->
+            Nothing
+
+
+unsubscribeCurrentProjectExcept : Maybe UUID -> Model -> Cmd Msg
+unsubscribeCurrentProjectExcept nextProjectId model =
+    case activeSyncedProjectId model.page of
+        Just projectId ->
+            if Just projectId == nextProjectId then
+                Cmd.none
+
+            else
+                unsubscribeProjectCmd projectId
+
+        Nothing ->
+            Cmd.none
+
+
+projectOpenSyncCmd : Project.Project -> Cmd Msg
+projectOpenSyncCmd project =
+    if project.sync then
+        Cmd.batch
+            [ fetchServerProjectVersionCmd project.id
+            , subscribeProjectCmd project.id
+            ]
+
+    else
+        Cmd.none
+
+
+updatedAtMillisDecoder : Decode.Decoder Time.Posix
+updatedAtMillisDecoder =
+    Decode.int
+        |> Decode.map Time.millisToPosix
+
+
+type alias ServerProjectEnvelope =
+    { projectId : UUID
+    , updatedAt : Time.Posix
+    , payload : Project.Project
+    }
+
+
+serverProjectEnvelopeDecoder : Decode.Decoder ServerProjectEnvelope
+serverProjectEnvelopeDecoder =
+    Decode.map3 ServerProjectEnvelope
+        (Decode.field "projectId" Project.uuidDecoder)
+        (Decode.field "updatedAt" updatedAtMillisDecoder)
+        (Decode.field "payload" Project.projectDecoder)
+
+
+type alias ServerProjectVersion =
+    { projectId : UUID
+    , exists : Bool
+    , updatedAt : Maybe Time.Posix
+    }
+
+
+serverProjectVersionDecoder : Decode.Decoder ServerProjectVersion
+serverProjectVersionDecoder =
+    Decode.map3 ServerProjectVersion
+        (Decode.field "projectId" Project.uuidDecoder)
+        (Decode.field "exists" Decode.bool)
+        (Decode.maybe (Decode.field "updatedAt" updatedAtMillisDecoder))
+
+
+type alias ServerProjectCheck =
+    { projectId : UUID
+    , exists : Bool
+    , hasUpdate : Bool
+    , serverUpdatedAt : Maybe Time.Posix
+    }
+
+
+serverProjectCheckDecoder : Decode.Decoder ServerProjectCheck
+serverProjectCheckDecoder =
+    Decode.map4 ServerProjectCheck
+        (Decode.field "projectId" Project.uuidDecoder)
+        (Decode.field "exists" Decode.bool)
+        (Decode.field "hasUpdate" Decode.bool)
+        (Decode.maybe (Decode.field "serverUpdatedAt" updatedAtMillisDecoder))
+
+
+serverProjectChecksDecoder : Decode.Decoder (List ServerProjectCheck)
+serverProjectChecksDecoder =
+    Decode.list serverProjectCheckDecoder
+
+
+type alias ServerSaveRejectedPayload =
+    { projectId : Maybe UUID
+    , reason : String
+    , serverUpdatedAt : Maybe Time.Posix
+    }
+
+
+serverProjectSaveRejectedDecoder : Decode.Decoder ServerSaveRejectedPayload
+serverProjectSaveRejectedDecoder =
+    Decode.map3 ServerSaveRejectedPayload
+        (Decode.oneOf
+            [ Decode.field "projectId" (Decode.nullable Project.uuidDecoder)
+            , Decode.succeed Nothing
+            ]
+        )
+        (Decode.field "reason" Decode.string)
+        (Decode.maybe (Decode.field "serverUpdatedAt" updatedAtMillisDecoder))
+
+
+type alias ServerUpdatedPayload =
+    { projectId : UUID
+    , updatedAt : Time.Posix
+    }
+
+
+serverProjectUpdatedDecoder : Decode.Decoder ServerUpdatedPayload
+serverProjectUpdatedDecoder =
+    Decode.map2 ServerUpdatedPayload
+        (Decode.field "projectId" Project.uuidDecoder)
+        (Decode.field "updatedAt" updatedAtMillisDecoder)
+
+
+type alias SyncFailure =
+    { operation : String
+    , projectId : Maybe UUID
+    , message : String
+    , status : Maybe Int
+    }
+
+
+syncFailureDecoder : Decode.Decoder SyncFailure
+syncFailureDecoder =
+    Decode.map4 SyncFailure
+        (Decode.field "operation" Decode.string)
+        (Decode.oneOf
+            [ Decode.field "projectId" (Decode.nullable Project.uuidDecoder)
+            , Decode.succeed Nothing
+            ]
+        )
+        (Decode.field "message" Decode.string)
+        (Decode.oneOf
+            [ Decode.field "status" (Decode.nullable Decode.int)
+            , Decode.succeed Nothing
+            ]
+        )
 
 
 scheduleProjectSave : UUID -> Cmd Msg
@@ -369,6 +662,194 @@ replaceCurrentPageProject project page =
             page
 
 
+posixMillis : Time.Posix -> Int
+posixMillis posix =
+    Time.posixToMillis posix
+
+
+posixGreaterThan : Time.Posix -> Time.Posix -> Bool
+posixGreaterThan left right =
+    posixMillis left > posixMillis right
+
+
+posixLessThan : Time.Posix -> Time.Posix -> Bool
+posixLessThan left right =
+    posixMillis left < posixMillis right
+
+
+serverProjectFromEnvelope : ServerProjectEnvelope -> Project.Project
+serverProjectFromEnvelope envelope =
+    envelope.payload
+        |> Project.setSync True
+        |> (\project -> { project | updatedAt = envelope.updatedAt })
+
+
+syncCommandForServerVersion : ServerProjectVersion -> Model -> Cmd Msg
+syncCommandForServerVersion version model =
+    case findProject version.projectId model.projects of
+        Just localProject ->
+            if localProject.sync then
+                case version.updatedAt of
+                    Just serverUpdatedAt ->
+                        if posixGreaterThan serverUpdatedAt localProject.updatedAt then
+                            fetchServerProjectCmd version.projectId
+
+                        else if posixLessThan serverUpdatedAt localProject.updatedAt then
+                            saveServerProjectCmd localProject
+
+                        else
+                            Cmd.none
+
+                    Nothing ->
+                        saveServerProjectCmd localProject
+
+            else
+                Cmd.none
+
+        Nothing ->
+            Cmd.none
+
+
+syncCommandForServerCheck : ServerProjectCheck -> Model -> Cmd Msg
+syncCommandForServerCheck check model =
+    case findProject check.projectId model.projects of
+        Just localProject ->
+            if localProject.sync then
+                case ( check.exists, check.serverUpdatedAt ) of
+                    ( False, _ ) ->
+                        saveServerProjectCmd localProject
+
+                    ( True, Just serverUpdatedAt ) ->
+                        if posixGreaterThan serverUpdatedAt localProject.updatedAt then
+                            fetchServerProjectCmd check.projectId
+
+                        else if posixLessThan serverUpdatedAt localProject.updatedAt then
+                            saveServerProjectCmd localProject
+
+                        else
+                            Cmd.none
+
+                    _ ->
+                        Cmd.none
+
+            else
+                Cmd.none
+
+        Nothing ->
+            Cmd.none
+
+
+handleServerProjectLoaded : ServerProjectEnvelope -> Model -> ( Model, Cmd Msg )
+handleServerProjectLoaded envelope model =
+    let
+        serverProject =
+            serverProjectFromEnvelope envelope
+
+        nextProjects =
+            upsertProject serverProject model.projects
+
+        openLoadedProject =
+            case model.page of
+                ProjectLoading loadingProjectId ->
+                    loadingProjectId == serverProject.id
+
+                ProjectLoadFailed failedProjectId _ ->
+                    failedProjectId == serverProject.id
+
+                TodoGraph todoGraphModel ->
+                    todoGraphModel.project.id == serverProject.id
+
+                _ ->
+                    False
+
+        ( nextPage, pageCmd ) =
+            if openLoadedProject then
+                let
+                    ( todoGraphModel, todoGraphCmd ) =
+                        initTodoGraph serverProject
+                in
+                ( TodoGraph todoGraphModel
+                , Cmd.map TodoGraphMsg todoGraphCmd
+                )
+
+            else
+                ( model.page, Cmd.none )
+    in
+    ( { model
+        | projects = nextProjects
+        , projectSelector = ProjectSelectorPage.init nextProjects
+        , page = nextPage
+      }
+    , Cmd.batch
+        [ saveProjectCmd serverProject
+        , pageCmd
+        , if openLoadedProject then
+            subscribeProjectCmd serverProject.id
+
+          else
+            Cmd.none
+        ]
+    )
+
+
+handleServerProjectUpdated : ServerUpdatedPayload -> Model -> ( Model, Cmd Msg )
+handleServerProjectUpdated serverUpdate model =
+    case findProject serverUpdate.projectId model.projects of
+        Just localProject ->
+            if localProject.sync && posixGreaterThan serverUpdate.updatedAt localProject.updatedAt then
+                ( model, fetchServerProjectCmd serverUpdate.projectId )
+
+            else
+                ( model, Cmd.none )
+
+        Nothing ->
+            ( model, Cmd.none )
+
+
+handleServerProjectSaveRejected : ServerSaveRejectedPayload -> Model -> ( Model, Cmd Msg )
+handleServerProjectSaveRejected rejection model =
+    case ( rejection.reason, rejection.projectId, rejection.serverUpdatedAt ) of
+        ( "stale_update", Just projectId, Just serverUpdatedAt ) ->
+            case findProject projectId model.projects of
+                Just localProject ->
+                    if posixGreaterThan serverUpdatedAt localProject.updatedAt then
+                        ( model, fetchServerProjectCmd projectId )
+
+                    else
+                        ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        _ ->
+            ( model, Cmd.none )
+
+
+handleSyncFailure : SyncFailure -> Model -> ( Model, Cmd Msg )
+handleSyncFailure failure model =
+    case ( failure.operation, failure.projectId, model.page ) of
+        ( "fetchProject", Just projectId, ProjectLoading loadingProjectId ) ->
+            if projectId == loadingProjectId then
+                let
+                    message =
+                        case failure.status of
+                            Just 404 ->
+                                "Project was not found on this device or on the server."
+
+                            _ ->
+                                "Project is not available locally, and the server could not be reached."
+                in
+                ( { model | page = ProjectLoadFailed projectId message }
+                , Cmd.none
+                )
+
+            else
+                ( model, Cmd.none )
+
+        _ ->
+            ( model, Cmd.none )
+
+
 timestampProjectForSave : UUID -> Time.Posix -> Model -> ( Model, Cmd Msg )
 timestampProjectForSave projectId updatedAt model =
     case findProject projectId model.projects of
@@ -381,7 +862,10 @@ timestampProjectForSave projectId updatedAt model =
                 | projects = upsertProject stampedProject model.projects
                 , page = replaceCurrentPageProject stampedProject model.page
               }
-            , saveProjectCmd stampedProject
+            , Cmd.batch
+                [ saveProjectCmd stampedProject
+                , debounceSaveSyncedProjectCmd stampedProject
+                ]
             )
 
         Nothing ->
@@ -461,6 +945,7 @@ update msg model =
                     , Cmd.batch
                         [ pageCmd
                         , Cmd.map TodoGraphMsg todoGraphCmd
+                        , unsubscribeCurrentProjectExcept Nothing model
                         , Nav.pushUrl model.key ("/p/" ++ UUID.toString projectId)
                         , scheduleProjectSave newProject.id
                         ]
@@ -501,6 +986,67 @@ update msg model =
                     , cmdWithStorageSave pageCmd maybeChangedProject
                     )
 
+                ProjectSelectorPage.ToggleProjectSync projectId sync ->
+                    let
+                        nextProjects =
+                            model.projects
+                                |> List.map
+                                    (\project ->
+                                        if project.id == projectId then
+                                            Project.setSync sync project
+
+                                        else
+                                            project
+                                    )
+
+                        maybeChangedProject =
+                            findProject projectId nextProjects
+
+                        nextPage =
+                            maybeChangedProject
+                                |> Maybe.map (\changedProject -> replaceCurrentPageProject changedProject model.page)
+                                |> Maybe.withDefault model.page
+
+                        syncCmd =
+                            case maybeChangedProject of
+                                Just changedProject ->
+                                    if sync then
+                                        Cmd.batch
+                                            [ saveServerProjectCmd changedProject
+                                            , if activeProjectId model.page == Just projectId then
+                                                subscribeProjectCmd projectId
+
+                                              else
+                                                Cmd.none
+                                            ]
+
+                                    else
+                                        unsubscribeProjectCmd projectId
+
+                                Nothing ->
+                                    Cmd.none
+                    in
+                    ( { newModel
+                        | projects = nextProjects
+                        , page = nextPage
+                      }
+                    , Cmd.batch
+                        [ pageCmd
+                        , maybeChangedProject
+                            |> Maybe.map saveProjectCmd
+                            |> Maybe.withDefault Cmd.none
+                        , syncCmd
+                        ]
+                    )
+
+                ProjectSelectorPage.CopyProjectLink projectId ->
+                    ( newModel
+                    , Cmd.batch
+                        [ pageCmd
+                        , copyProjectLinkCmd projectId
+                        ]
+                    )
+
                 ProjectSelectorPage.ConfirmProjectDelete projectId ->
                     let
                         nextProjects =
@@ -510,6 +1056,9 @@ update msg model =
                         deletedActiveProject =
                             activeProjectId model.page == Just projectId
 
+                        deletedSyncedActiveProject =
+                            activeSyncedProjectId model.page == Just projectId
+
                         nextModel =
                             if deletedActiveProject then
                                 { newModel
@@ -517,7 +1066,7 @@ update msg model =
                                     , page = NoProjectSelected
                                     , route = Just Route.ProjectSelector
                                     , mobileSidebarOpen = False
-                                  }
+                                }
 
                             else
                                 { newModel | projects = nextProjects }
@@ -534,6 +1083,11 @@ update msg model =
                         [ pageCmd
                         , deleteProjectCmd projectId
                         , routeCmd
+                        , if deletedSyncedActiveProject then
+                            unsubscribeProjectCmd projectId
+
+                          else
+                            Cmd.none
                         ]
                     )
 
@@ -575,11 +1129,20 @@ update msg model =
         ( ProjectsLoaded value, _ ) ->
             case Decode.decodeValue Project.projectsDecoder value of
                 Ok storedProjects ->
-                    changeRouteTo model.route
-                        { model
-                            | projects = storedProjects
-                            , projectSelector = ProjectSelectorPage.init storedProjects
-                        }
+                    let
+                        ( routedModel, routeCmd ) =
+                            changeRouteTo model.route
+                                { model
+                                    | projects = storedProjects
+                                    , projectSelector = ProjectSelectorPage.init storedProjects
+                                }
+                    in
+                    ( routedModel
+                    , Cmd.batch
+                        [ routeCmd
+                        , checkSyncedProjectsCmd storedProjects
+                        ]
+                    )
 
                 Err error ->
                     ( { model | storageError = Just (Decode.errorToString error) }
@@ -615,6 +1178,61 @@ update msg model =
             ( routedModel
             , Cmd.batch [ routeCmd, scheduleProjectSave firstProject.id ]
             )
+
+        ( ServerProjectsChecked value, _ ) ->
+            case Decode.decodeValue serverProjectChecksDecoder value of
+                Ok checks ->
+                    ( model
+                    , checks
+                        |> List.map (\check -> syncCommandForServerCheck check model)
+                        |> Cmd.batch
+                    )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        ( ServerProjectVersionLoaded value, _ ) ->
+            case Decode.decodeValue serverProjectVersionDecoder value of
+                Ok version ->
+                    ( model, syncCommandForServerVersion version model )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        ( ServerProjectLoaded value, _ ) ->
+            case Decode.decodeValue serverProjectEnvelopeDecoder value of
+                Ok envelope ->
+                    handleServerProjectLoaded envelope model
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        ( ServerProjectSaveAccepted _, _ ) ->
+            ( model, Cmd.none )
+
+        ( ServerProjectSaveRejected value, _ ) ->
+            case Decode.decodeValue serverProjectSaveRejectedDecoder value of
+                Ok rejection ->
+                    handleServerProjectSaveRejected rejection model
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        ( ServerProjectUpdated value, _ ) ->
+            case Decode.decodeValue serverProjectUpdatedDecoder value of
+                Ok serverUpdate ->
+                    handleServerProjectUpdated serverUpdate model
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        ( SyncFailed value, _ ) ->
+            case Decode.decodeValue syncFailureDecoder value of
+                Ok failure ->
+                    handleSyncFailure failure model
+
+                Err _ ->
+                    ( model, Cmd.none )
 
         ( ProjectTimestampedForSave projectId updatedAt, _ ) ->
             timestampProjectForSave projectId updatedAt model

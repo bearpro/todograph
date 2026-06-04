@@ -47,6 +47,7 @@ type alias Project =
     { id : UUID
     , name : Maybe String
     , updatedAt : Time.Posix
+    , sync : Bool
     , columns : List Column
     }
 
@@ -81,6 +82,11 @@ maxPosix left right =
 touch : Time.Posix -> Project -> Project
 touch updatedAt project =
     { project | updatedAt = maxPosix project.updatedAt updatedAt }
+
+
+setSync : Bool -> Project -> Project
+setSync sync project =
+    { project | sync = sync }
 
 
 uuidEncoder : UUID -> Encode.Value
@@ -230,6 +236,18 @@ projectEncoder project =
         , ( "id", uuidEncoder project.id )
         , ( "name", maybeEncoder Encode.string project.name )
         , ( "updatedAt", updatedAtEncoder project.updatedAt )
+        , ( "sync", Encode.bool project.sync )
+        , ( "columns", Encode.list columnEncoder project.columns )
+        ]
+
+
+projectPayloadEncoder : Project -> Encode.Value
+projectPayloadEncoder project =
+    Encode.object
+        [ ( "schemaVersion", Encode.int schemaVersion )
+        , ( "id", uuidEncoder project.id )
+        , ( "name", maybeEncoder Encode.string project.name )
+        , ( "updatedAt", updatedAtEncoder project.updatedAt )
         , ( "columns", Encode.list columnEncoder project.columns )
         ]
 
@@ -240,10 +258,15 @@ projectDecoder =
         |> Decode.andThen
             (\version ->
                 if version == schemaVersion then
-                    Decode.map4 Project
+                    Decode.map5 Project
                         (Decode.field "id" uuidDecoder)
                         (Decode.field "name" (Decode.nullable Decode.string))
                         (Decode.field "updatedAt" updatedAtDecoder)
+                        (Decode.oneOf
+                            [ Decode.field "sync" Decode.bool
+                            , Decode.succeed False
+                            ]
+                        )
                         (Decode.field "columns" (Decode.list columnDecoder))
 
                 else
@@ -287,6 +310,7 @@ initialProject projectId firstNodeId =
     { id = projectId
     , name = Nothing
     , updatedAt = epoch
+    , sync = False
     , columns =
         [ { id = projectId
           , order = 0
