@@ -1315,12 +1315,11 @@ arrowUp x y =
     div
         [ edgeBase
         , style "left" (px (x - 5))
-        , style "bottom" (px (y - 1))
-        , style "width" "0"
-        , style "height" "0"
-        , style "border-left" "5px solid transparent"
-        , style "border-right" "5px solid transparent"
-        , style "border-bottom" ("8px solid " ++ edgeColor)
+        , style "bottom" (px (y - 8))
+        , style "width" "10px"
+        , style "height" "8px"
+        , style "background" edgeColor
+        , style "clip-path" "polygon(50% 0, 100% 100%, 0 100%)"
         ]
         []
 
@@ -1329,13 +1328,12 @@ arrowRight : Int -> Int -> Html Msg
 arrowRight x y =
     div
         [ edgeBase
-        , style "left" (px (x - 1))
+        , style "left" (px (x - 8))
         , style "bottom" (px (y - 5))
-        , style "width" "0"
-        , style "height" "0"
-        , style "border-top" "5px solid transparent"
-        , style "border-bottom" "5px solid transparent"
-        , style "border-left" ("8px solid " ++ edgeColor)
+        , style "width" "8px"
+        , style "height" "10px"
+        , style "background" edgeColor
+        , style "clip-path" "polygon(0 0, 100% 50%, 0 100%)"
         ]
         []
 
@@ -1345,12 +1343,11 @@ arrowDown x y =
     div
         [ edgeBase
         , style "left" (px (x - 5))
-        , style "bottom" (px (y - 7))
-        , style "width" "0"
-        , style "height" "0"
-        , style "border-left" "5px solid transparent"
-        , style "border-right" "5px solid transparent"
-        , style "border-top" ("8px solid " ++ edgeColor)
+        , style "bottom" (px y)
+        , style "width" "10px"
+        , style "height" "8px"
+        , style "background" edgeColor
+        , style "clip-path" "polygon(0 0, 100% 0, 50% 100%)"
         ]
         []
 
@@ -1359,13 +1356,12 @@ arrowLeft : Int -> Int -> Html Msg
 arrowLeft x y =
     div
         [ edgeBase
-        , style "left" (px (x - 7))
+        , style "left" (px x)
         , style "bottom" (px (y - 5))
-        , style "width" "0"
-        , style "height" "0"
-        , style "border-top" "5px solid transparent"
-        , style "border-bottom" "5px solid transparent"
-        , style "border-right" ("8px solid " ++ edgeColor)
+        , style "width" "8px"
+        , style "height" "10px"
+        , style "background" edgeColor
+        , style "clip-path" "polygon(100% 0, 0 50%, 100% 100%)"
         ]
         []
 
