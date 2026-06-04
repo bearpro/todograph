@@ -32,12 +32,14 @@
             elmPackages.elm-live
 
             # Bun backend
-            bun
+            nodejs_24
+            pnpm
           ];
 
           shellHook = ''
-            echo "elm: $(elm --version)"
-            echo "bun: $(bun --version)"
+            echo "elm:  $(elm --version)"
+            echo "node: $(node --version)"
+            echo "pnpm: $(pnpm --version)"
           '';
         };
       });
