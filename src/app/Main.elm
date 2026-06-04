@@ -1238,8 +1238,7 @@ update msg model =
             timestampProjectForSave projectId updatedAt model
 
         _ ->
-            Debug.log "Unexpected root update"
-                ( model, Cmd.none )
+            ( model, Cmd.none )
 
 
 main : Program () Model Msg

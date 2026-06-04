@@ -1,0 +1,12 @@
+.git/
+.agents/
+.codex/
+.vscode/
+
+**/node_modules/
+**/dist/
+**/coverage/
+**/elm-stuff/
+
+*.log
+.DS_Store
