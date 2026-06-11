@@ -84,9 +84,10 @@ async function networkFirstNavigation(request) {
 
     if (response.ok) {
       await cache.put("/index.html", response.clone());
+      return response;
     }
 
-    return response;
+    return (await cache.match("/index.html")) || response;
   } catch (_error) {
     return (await cache.match("/index.html")) || Response.error();
   }
