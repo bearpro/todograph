@@ -4,6 +4,7 @@ port module Ports.ProjectSync exposing
     , fetchServerProject
     , fetchServerProjectVersion
     , saveServerProject
+    , serverAvailabilityChanged
     , serverProjectLoaded
     , serverProjectSaveAccepted
     , serverProjectSaveRejected
@@ -41,6 +42,9 @@ port unsubscribeProject : String -> Cmd msg
 
 
 port serverProjectsChecked : (Decode.Value -> msg) -> Sub msg
+
+
+port serverAvailabilityChanged : (Bool -> msg) -> Sub msg
 
 
 port serverProjectVersionLoaded : (Decode.Value -> msg) -> Sub msg

@@ -1,10 +1,13 @@
 (function () {
   const defaultDebounceMs = 1000;
+  const defaultAvailabilityPingMs = 15000;
   const saveTimers = new Map();
   const subscriptions = new Set();
   let app = null;
   let socket = null;
   let reconnectTimer = null;
+  let availabilityPingTimer = null;
+  let serverAvailable = null;
 
   function config() {
     return window.TodoGraphSyncConfig || {};
@@ -30,12 +33,25 @@
     }
   }
 
+  function setServerAvailability(available) {
+    if (serverAvailable === available) {
+      return;
+    }
+
+    serverAvailable = available;
+    sendPort("serverAvailabilityChanged", available);
+  }
+
   function projectPath(projectId) {
     return "/projects/" + encodeURIComponent(projectId);
   }
 
   function reportSyncFailure(operation, projectId, error, status) {
     const message = error && error.message ? error.message : String(error);
+
+    if (!status) {
+      setServerAvailability(false);
+    }
 
     sendPort("syncFailed", {
       operation,
@@ -81,6 +97,7 @@
           payload: envelope.payload,
         }),
       });
+      setServerAvailability(true);
       const body = await responseJson(response);
 
       if (response.ok) {
@@ -139,6 +156,7 @@
   async function fetchProject(projectId) {
     try {
       const response = await fetch(apiUrl(projectPath(projectId)));
+      setServerAvailability(true);
       const body = await responseJson(response);
 
       if (response.ok) {
@@ -160,6 +178,7 @@
   async function fetchProjectVersion(projectId) {
     try {
       const response = await fetch(apiUrl(projectPath(projectId) + "/version"));
+      setServerAvailability(true);
       const body = await responseJson(response);
 
       if (response.ok && body) {
@@ -204,6 +223,7 @@
         },
         body: JSON.stringify(projects),
       });
+      setServerAvailability(true);
       const body = await responseJson(response);
 
       if (response.ok && Array.isArray(body)) {
@@ -234,6 +254,8 @@
     socket = new WebSocket(websocketUrl());
 
     socket.addEventListener("open", () => {
+      setServerAvailability(true);
+
       for (const projectId of subscriptions) {
         sendSocketMessage({
           type: "subscribeProject",
@@ -267,10 +289,48 @@
     });
 
     socket.addEventListener("error", () => {
+      setServerAvailability(false);
+
       if (socket) {
         socket.close();
       }
     });
+  }
+
+  async function pingServerAvailability() {
+    if (window.navigator && window.navigator.onLine === false) {
+      setServerAvailability(false);
+      return;
+    }
+
+    try {
+      const response = await fetch(apiUrl("/projects/check-updates"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: "[]",
+      });
+
+      setServerAvailability(response.ok);
+    } catch (_error) {
+      setServerAvailability(false);
+    }
+  }
+
+  function startAvailabilityPing() {
+    if (availabilityPingTimer) {
+      return;
+    }
+
+    window.addEventListener("online", pingServerAvailability);
+    window.addEventListener("offline", () => setServerAvailability(false));
+
+    pingServerAvailability();
+    availabilityPingTimer = window.setInterval(
+      pingServerAvailability,
+      Number(config().availabilityPingMs || defaultAvailabilityPingMs)
+    );
   }
 
   function scheduleReconnect() {
@@ -326,6 +386,7 @@
 
   function init(elmApp) {
     app = elmApp;
+    startAvailabilityPing();
 
     app.ports.checkServerProjects.subscribe(checkProjects);
     app.ports.fetchServerProject.subscribe(fetchProject);

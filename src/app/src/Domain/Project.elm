@@ -48,6 +48,7 @@ type alias Project =
     , name : Maybe String
     , updatedAt : Time.Posix
     , sync : Bool
+    , syncPending : Bool
     , chains : List Chain
     }
 
@@ -86,7 +87,20 @@ touch updatedAt project =
 
 setSync : Bool -> Project -> Project
 setSync sync project =
-    { project | sync = sync }
+    { project
+        | sync = sync
+        , syncPending =
+            if sync then
+                project.syncPending
+
+            else
+                False
+    }
+
+
+setSyncPending : Bool -> Project -> Project
+setSyncPending syncPending project =
+    { project | syncPending = syncPending }
 
 
 uuidEncoder : UUID -> Encode.Value
@@ -237,6 +251,7 @@ projectEncoder project =
         , ( "name", maybeEncoder Encode.string project.name )
         , ( "updatedAt", updatedAtEncoder project.updatedAt )
         , ( "sync", Encode.bool project.sync )
+        , ( "syncPending", Encode.bool project.syncPending )
         , ( "chains", Encode.list chainEncoder project.chains )
         ]
 
@@ -258,12 +273,17 @@ projectDecoder =
         |> Decode.andThen
             (\version ->
                 if version == schemaVersion then
-                    Decode.map5 Project
+                    Decode.map6 Project
                         (Decode.field "id" uuidDecoder)
                         (Decode.field "name" (Decode.nullable Decode.string))
                         (Decode.field "updatedAt" updatedAtDecoder)
                         (Decode.oneOf
                             [ Decode.field "sync" Decode.bool
+                            , Decode.succeed False
+                            ]
+                        )
+                        (Decode.oneOf
+                            [ Decode.field "syncPending" Decode.bool
                             , Decode.succeed False
                             ]
                         )
@@ -311,6 +331,7 @@ initialProject projectId firstNodeId =
     , name = Nothing
     , updatedAt = epoch
     , sync = False
+    , syncPending = False
     , chains =
         [ { id = projectId
           , order = 0

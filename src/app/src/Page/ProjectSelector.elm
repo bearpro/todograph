@@ -1,4 +1,4 @@
-module Page.ProjectSelector exposing (Model, Msg(..), init, update, view, viewPanel)
+module Page.ProjectSelector exposing (Model, Msg(..), ProjectSyncDisplay(..), init, projectSyncDisplay, update, view, viewPanel)
 
 import Browser exposing (Document)
 import Browser.Dom as Dom
@@ -18,7 +18,14 @@ type alias Project =
     { id : UUID
     , name : Maybe String
     , sync : Bool
+    , syncPending : Bool
     }
+
+
+type ProjectSyncDisplay
+    = SyncOff
+    | SyncClean
+    | SyncPending
 
 
 type State
@@ -72,7 +79,13 @@ projectSummary project =
     { id = project.id
     , name = project.name
     , sync = project.sync
+    , syncPending = project.syncPending
     }
+
+
+projectSyncDisplay : DomainProject.Project -> ProjectSyncDisplay
+projectSyncDisplay project =
+    syncDisplay project.sync project.syncPending
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -95,7 +108,7 @@ update msg model =
         NewProjectGenerated id ->
             let
                 newProject =
-                    { id = id, name = Nothing, sync = False }
+                    { id = id, name = Nothing, sync = False, syncPending = False }
 
                 newModel =
                     { model
@@ -233,10 +246,30 @@ renameProject id maybeEdit project =
 setProjectSync : UUID -> Bool -> Project -> Project
 setProjectSync id sync project =
     if project.id == id then
-        { project | sync = sync }
+        { project
+            | sync = sync
+            , syncPending =
+                if sync then
+                    project.syncPending
+
+                else
+                    False
+        }
 
     else
         project
+
+
+syncDisplay : Bool -> Bool -> ProjectSyncDisplay
+syncDisplay sync syncPending =
+    if not sync then
+        SyncOff
+
+    else if syncPending then
+        SyncPending
+
+    else
+        SyncClean
 
 
 nameFromDraft : String -> Maybe String
@@ -372,26 +405,37 @@ onClickStop msg =
 viewProjectSyncButton : Bool -> Project -> Html Msg
 viewProjectSyncButton isActive project =
     let
-        label =
-            if project.sync then
-                "Disable sync for " ++ projectDisplayName project
+        display =
+            syncDisplay project.sync project.syncPending
 
-            else
-                "Enable sync for " ++ projectDisplayName project
+        label =
+            case display of
+                SyncOff ->
+                    "Enable sync for " ++ projectDisplayName project
+
+                SyncClean ->
+                    "Disable sync for " ++ projectDisplayName project
+
+                SyncPending ->
+                    "Waiting for sync. Disable sync for " ++ projectDisplayName project
 
         icon =
-            if project.sync then
-                FluentIcon.CloudCheckmark
+            case display of
+                SyncOff ->
+                    FluentIcon.CloudOff
 
-            else
-                FluentIcon.CloudOff
+                SyncClean ->
+                    FluentIcon.CloudCheckmark
+
+                SyncPending ->
+                    FluentIcon.CloudSync
     in
     button
         [ onClickStop (ToggleProjectSync project.id (not project.sync))
         , type_ "button"
         , title label
         , Attr.attribute "aria-label" label
-        , class (projectSyncButtonClass isActive project.sync)
+        , class (projectSyncButtonClass isActive display)
         ]
         [ FluentIcon.view icon ]
 
@@ -408,13 +452,17 @@ viewProjectCloneButton _ project =
         [ FluentIcon.view FluentIcon.Copy ]
 
 
-projectSyncButtonClass : Bool -> Bool -> String
-projectSyncButtonClass _ sync =
-    if sync then
-        "btn btn-outline-success btn-sm btn-icon"
+projectSyncButtonClass : Bool -> ProjectSyncDisplay -> String
+projectSyncButtonClass _ display =
+    case display of
+        SyncOff ->
+            "btn btn-outline-secondary btn-sm btn-icon"
 
-    else
-        "btn btn-outline-secondary btn-sm btn-icon"
+        SyncClean ->
+            "btn btn-outline-success btn-sm btn-icon"
+
+        SyncPending ->
+            "btn btn-outline-warning btn-sm btn-icon"
 
 
 viewProjectRenameButton : Bool -> Project -> Html Msg

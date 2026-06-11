@@ -37,6 +37,7 @@ type alias Model =
     , projectSelector : ProjectSelectorPage.Model
     , route : Maybe Route
     , storageError : Maybe String
+    , serverStatus : Control.Navbar.ServerStatus
     , desktopSidebarVisible : Bool
     , mobileSidebarOpen : Bool
     }
@@ -58,6 +59,7 @@ type Msg
     | ServerProjectSaveAccepted Decode.Value
     | ServerProjectSaveRejected Decode.Value
     | ServerProjectUpdated Decode.Value
+    | ServerAvailabilityChanged Bool
     | SyncFailed Decode.Value
     | ToggleDesktopSidebar
     | ToggleMobileSidebar
@@ -72,6 +74,7 @@ init () url navKey =
       , projectSelector = ProjectSelectorPage.init []
       , route = Route.fromUrl url
       , storageError = Nothing
+      , serverStatus = Control.Navbar.Checking
       , desktopSidebarVisible = True
       , mobileSidebarOpen = False
       }
@@ -213,6 +216,7 @@ viewShell model workspace =
         [ Control.Navbar.view
             { currentPage = currentRoute model.page
             , currentProjectName = currentProjectName model.page
+            , serverStatus = model.serverStatus
             , desktopSidebarVisible = model.desktopSidebarVisible
             , onToggleDesktopSidebar = ToggleDesktopSidebar
             , onToggleMobileSidebar = ToggleMobileSidebar
@@ -246,6 +250,7 @@ subscriptions model =
         , ProjectSync.serverProjectSaveAccepted ServerProjectSaveAccepted
         , ProjectSync.serverProjectSaveRejected ServerProjectSaveRejected
         , ProjectSync.serverProjectUpdated ServerProjectUpdated
+        , ProjectSync.serverAvailabilityChanged ServerAvailabilityChanged
         , ProjectSync.syncFailed SyncFailed
         , case model.page of
             TodoGraph page ->
@@ -508,6 +513,19 @@ serverProjectEnvelopeDecoder =
         (Decode.field "payload" Project.projectDecoder)
 
 
+type alias ServerSaveAcceptedPayload =
+    { projectId : UUID
+    , updatedAt : Time.Posix
+    }
+
+
+serverProjectSaveAcceptedDecoder : Decode.Decoder ServerSaveAcceptedPayload
+serverProjectSaveAcceptedDecoder =
+    Decode.map2 ServerSaveAcceptedPayload
+        (Decode.field "projectId" Project.uuidDecoder)
+        (Decode.field "updatedAt" updatedAtMillisDecoder)
+
+
 type alias ServerProjectVersion =
     { projectId : UUID
     , exists : Bool
@@ -639,6 +657,7 @@ cloneProject cloneId project =
         | id = cloneId
         , name = Just (projectDisplayName project ++ " (cloned)")
         , sync = False
+        , syncPending = False
     }
 
 
@@ -673,6 +692,58 @@ replaceCurrentPageProject project page =
             page
 
 
+syncProjectListIntoSelector : List Project.Project -> ProjectSelectorPage.Model
+syncProjectListIntoSelector projects =
+    ProjectSelectorPage.init projects
+
+
+storeProjectInModel : Project.Project -> Model -> Model
+storeProjectInModel project model =
+    let
+        nextProjects =
+            upsertProject project model.projects
+    in
+    { model
+        | projects = nextProjects
+        , projectSelector = syncProjectListIntoSelector nextProjects
+        , page = replaceCurrentPageProject project model.page
+    }
+
+
+markSyncPending : Project.Project -> Project.Project
+markSyncPending project =
+    if project.sync then
+        Project.setSyncPending True project
+
+    else
+        project
+
+
+queueServerSave : Project.Project -> Model -> ( Model, Cmd Msg )
+queueServerSave project model =
+    let
+        pendingProject =
+            markSyncPending project
+
+        nextModel =
+            storeProjectInModel pendingProject model
+    in
+    ( nextModel
+    , Cmd.batch
+        [ saveProjectCmd pendingProject
+        , saveServerProjectCmd pendingProject
+        ]
+    )
+
+
+retryPendingSyncedProjectsCmd : List Project.Project -> Cmd Msg
+retryPendingSyncedProjectsCmd projects =
+    projects
+        |> List.filter (\project -> project.sync && project.syncPending)
+        |> List.map saveServerProjectCmd
+        |> Cmd.batch
+
+
 posixMillis : Time.Posix -> Int
 posixMillis posix =
     Time.posixToMillis posix
@@ -692,62 +763,79 @@ serverProjectFromEnvelope : ServerProjectEnvelope -> Project.Project
 serverProjectFromEnvelope envelope =
     envelope.payload
         |> Project.setSync True
+        |> Project.setSyncPending False
         |> (\project -> { project | updatedAt = envelope.updatedAt })
 
 
-syncCommandForServerVersion : ServerProjectVersion -> Model -> Cmd Msg
-syncCommandForServerVersion version model =
+handleServerProjectVersion : ServerProjectVersion -> Model -> ( Model, Cmd Msg )
+handleServerProjectVersion version model =
     case findProject version.projectId model.projects of
         Just localProject ->
             if localProject.sync then
                 case version.updatedAt of
                     Just serverUpdatedAt ->
                         if posixGreaterThan serverUpdatedAt localProject.updatedAt then
-                            fetchServerProjectCmd version.projectId
+                            ( model, fetchServerProjectCmd version.projectId )
 
                         else if posixLessThan serverUpdatedAt localProject.updatedAt then
-                            saveServerProjectCmd localProject
+                            queueServerSave localProject model
 
                         else
-                            Cmd.none
+                            ( model, Cmd.none )
 
                     Nothing ->
-                        saveServerProjectCmd localProject
+                        queueServerSave localProject model
 
             else
-                Cmd.none
+                ( model, Cmd.none )
 
         Nothing ->
-            Cmd.none
+            ( model, Cmd.none )
 
 
-syncCommandForServerCheck : ServerProjectCheck -> Model -> Cmd Msg
-syncCommandForServerCheck check model =
+handleServerProjectCheck : ServerProjectCheck -> Model -> ( Model, Cmd Msg )
+handleServerProjectCheck check model =
     case findProject check.projectId model.projects of
         Just localProject ->
             if localProject.sync then
                 case ( check.exists, check.serverUpdatedAt ) of
                     ( False, _ ) ->
-                        saveServerProjectCmd localProject
+                        queueServerSave localProject model
 
                     ( True, Just serverUpdatedAt ) ->
                         if posixGreaterThan serverUpdatedAt localProject.updatedAt then
-                            fetchServerProjectCmd check.projectId
+                            ( model, fetchServerProjectCmd check.projectId )
 
                         else if posixLessThan serverUpdatedAt localProject.updatedAt then
-                            saveServerProjectCmd localProject
+                            queueServerSave localProject model
 
                         else
-                            Cmd.none
+                            ( model, Cmd.none )
 
                     _ ->
-                        Cmd.none
+                        ( model, Cmd.none )
 
             else
-                Cmd.none
+                ( model, Cmd.none )
 
         Nothing ->
-            Cmd.none
+            ( model, Cmd.none )
+
+
+handleServerProjectChecks : List ServerProjectCheck -> Model -> ( Model, Cmd Msg )
+handleServerProjectChecks checks model =
+    let
+        applyCheck check ( currentModel, queuedCmds ) =
+            let
+                ( checkedModel, cmd ) =
+                    handleServerProjectCheck check currentModel
+            in
+            ( checkedModel, cmd :: queuedCmds )
+
+        ( nextModel, cmds ) =
+            List.foldl applyCheck ( model, [] ) checks
+    in
+    ( nextModel, Cmd.batch (List.reverse cmds) )
 
 
 handleServerProjectLoaded : ServerProjectEnvelope -> Model -> ( Model, Cmd Msg )
@@ -803,6 +891,27 @@ handleServerProjectLoaded envelope model =
     )
 
 
+handleServerProjectSaveAccepted : ServerSaveAcceptedPayload -> Model -> ( Model, Cmd Msg )
+handleServerProjectSaveAccepted accepted model =
+    case findProject accepted.projectId model.projects of
+        Just localProject ->
+            if localProject.sync && not (posixLessThan accepted.updatedAt localProject.updatedAt) then
+                let
+                    cleanProject =
+                        Project.setSyncPending False localProject
+
+                    nextModel =
+                        storeProjectInModel cleanProject model
+                in
+                ( nextModel, saveProjectCmd cleanProject )
+
+            else
+                ( model, Cmd.none )
+
+        Nothing ->
+            ( model, Cmd.none )
+
+
 handleServerProjectUpdated : ServerUpdatedPayload -> Model -> ( Model, Cmd Msg )
 handleServerProjectUpdated serverUpdate model =
     case findProject serverUpdate.projectId model.projects of
@@ -838,6 +947,15 @@ handleServerProjectSaveRejected rejection model =
 
 handleSyncFailure : SyncFailure -> Model -> ( Model, Cmd Msg )
 handleSyncFailure failure model =
+    let
+        statusModel =
+            case failure.status of
+                Nothing ->
+                    { model | serverStatus = Control.Navbar.ServerUnavailable }
+
+                Just _ ->
+                    model
+    in
     case ( failure.operation, failure.projectId, model.page ) of
         ( "fetchProject", Just projectId, ProjectLoading loadingProjectId ) ->
             if projectId == loadingProjectId then
@@ -850,15 +968,15 @@ handleSyncFailure failure model =
                             _ ->
                                 "Project is not available locally, and the server could not be reached."
                 in
-                ( { model | page = ProjectLoadFailed projectId message }
+                ( { statusModel | page = ProjectLoadFailed projectId message }
                 , Cmd.none
                 )
 
             else
-                ( model, Cmd.none )
+                ( statusModel, Cmd.none )
 
         _ ->
-            ( model, Cmd.none )
+            ( statusModel, Cmd.none )
 
 
 timestampProjectForSave : UUID -> Time.Posix -> Model -> ( Model, Cmd Msg )
@@ -868,9 +986,14 @@ timestampProjectForSave projectId updatedAt model =
             let
                 stampedProject =
                     Project.touch updatedAt project
+                        |> markSyncPending
+
+                nextProjects =
+                    upsertProject stampedProject model.projects
             in
             ( { model
-                | projects = upsertProject stampedProject model.projects
+                | projects = nextProjects
+                , projectSelector = syncProjectListIntoSelector nextProjects
                 , page = replaceCurrentPageProject stampedProject model.page
               }
             , Cmd.batch
@@ -1017,7 +1140,13 @@ update msg model =
                                 |> List.map
                                     (\project ->
                                         if project.id == projectId then
-                                            Project.setSync sync project
+                                            if sync then
+                                                project
+                                                    |> Project.setSync True
+                                                    |> Project.setSyncPending True
+
+                                            else
+                                                Project.setSync False project
 
                                         else
                                             project
@@ -1052,6 +1181,7 @@ update msg model =
                     in
                     ( { newModel
                         | projects = nextProjects
+                        , projectSelector = syncProjectListIntoSelector nextProjects
                         , page = nextPage
                       }
                     , Cmd.batch
@@ -1235,11 +1365,7 @@ update msg model =
         ( ServerProjectsChecked value, _ ) ->
             case Decode.decodeValue serverProjectChecksDecoder value of
                 Ok checks ->
-                    ( model
-                    , checks
-                        |> List.map (\check -> syncCommandForServerCheck check model)
-                        |> Cmd.batch
-                    )
+                    handleServerProjectChecks checks model
 
                 Err _ ->
                     ( model, Cmd.none )
@@ -1247,7 +1373,7 @@ update msg model =
         ( ServerProjectVersionLoaded value, _ ) ->
             case Decode.decodeValue serverProjectVersionDecoder value of
                 Ok version ->
-                    ( model, syncCommandForServerVersion version model )
+                    handleServerProjectVersion version model
 
                 Err _ ->
                     ( model, Cmd.none )
@@ -1260,8 +1386,13 @@ update msg model =
                 Err _ ->
                     ( model, Cmd.none )
 
-        ( ServerProjectSaveAccepted _, _ ) ->
-            ( model, Cmd.none )
+        ( ServerProjectSaveAccepted value, _ ) ->
+            case Decode.decodeValue serverProjectSaveAcceptedDecoder value of
+                Ok accepted ->
+                    handleServerProjectSaveAccepted accepted model
+
+                Err _ ->
+                    ( model, Cmd.none )
 
         ( ServerProjectSaveRejected value, _ ) ->
             case Decode.decodeValue serverProjectSaveRejectedDecoder value of
@@ -1278,6 +1409,20 @@ update msg model =
 
                 Err _ ->
                     ( model, Cmd.none )
+
+        ( ServerAvailabilityChanged available, _ ) ->
+            if available then
+                ( { model | serverStatus = Control.Navbar.ServerAvailable }
+                , Cmd.batch
+                    [ retryPendingSyncedProjectsCmd model.projects
+                    , checkSyncedProjectsCmd model.projects
+                    ]
+                )
+
+            else
+                ( { model | serverStatus = Control.Navbar.ServerUnavailable }
+                , Cmd.none
+                )
 
         ( SyncFailed value, _ ) ->
             case Decode.decodeValue syncFailureDecoder value of
